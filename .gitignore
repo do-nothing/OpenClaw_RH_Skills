@@ -36,3 +36,5 @@ Thumbs.db
 /runninghub/config/**/*.json
 # Runtime task-pool data (SQLite ledger, working files)
 /runninghub/data/pool/
+# Local self-tests (not shipped)
+/runninghub/tests/
