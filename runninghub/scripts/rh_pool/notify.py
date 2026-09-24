@@ -25,6 +25,10 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 POOL_DIR = SCRIPT_DIR.parents[1]              # runninghub/
 NOTIFY_SCRIPT = SCRIPT_DIR / "notify.py"
 
+# Allow running as a plain script (`python scripts/rh_pool/notify.py run`).
+sys.path.insert(0, str(SCRIPT_DIR))
+sys.path.insert(0, str(SCRIPT_DIR.parents[0]))  # .../scripts
+
 AUTOMATION_DECLARATION_KEY = "rh-pool-poll"
 AUTOMATION_NAME = "rh-pool-poll"
 AUTOMATION_EVERY = "30s"
@@ -117,6 +121,9 @@ def ensure_polling_automation() -> dict:
         "--every", AUTOMATION_EVERY,
         "--command-argv", json.dumps(argv),
         "--command-cwd", str(POOL_DIR),
+        # The worker wakes sessions itself; the scheduler must not try to
+        # announce job output to a channel.
+        "--no-deliver",
         "--declaration-key", AUTOMATION_DECLARATION_KEY,
         "--json",
     ]
@@ -150,12 +157,34 @@ def remove_polling_automation() -> list[str]:
 
 
 def wake_session(session_key: str, message: str) -> bool:
-    """Inject a message into a session via the CLI (starts an agent turn)."""
-    code, out = _run_cli(["agent", "--session-key", session_key,
-                          "--message", message])
-    ok = code == 0
-    log(f"wake session={session_key} ok={ok} rc={code} {out.strip()[:200]}")
-    return ok
+    """Issue a wake into a session via the CLI, fire-and-forget.
+
+    We only *issue* the command; we never wait for the resulting agent turn
+    (which can run for minutes). Waiting here would pin the worker and its lock
+    open, so the polling automation would never be removed. Issuing is the
+    commitment: the caller removes the automation right after this returns.
+    """
+    exe = _openclaw_bin()
+    if not exe:
+        log("wake: openclaw CLI not found")
+        return False
+    argv = [exe, "agent", "--session-key", session_key, "--message", message]
+    kwargs: dict = {"stdin": subprocess.DEVNULL,
+                    "stdout": subprocess.DEVNULL,
+                    "stderr": subprocess.DEVNULL,
+                    "close_fds": True}
+    if os.name == "nt":
+        kwargs["creationflags"] = (subprocess.DETACHED_PROCESS
+                                   | subprocess.CREATE_NEW_PROCESS_GROUP)
+    else:
+        kwargs["start_new_session"] = True
+    try:
+        subprocess.Popen(argv, **kwargs)
+    except Exception as exc:  # noqa: BLE001
+        log(f"wake spawn FAILED session={session_key}: {exc}")
+        return False
+    log(f"wake issued session={session_key}")
+    return True
 
 
 # -------------------------------------------------------------------- locking
