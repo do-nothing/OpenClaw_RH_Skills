@@ -349,43 +349,47 @@ def _tick_lock(store: Store):
             store.set_meta("tick_lock", "")
 
 
-def cmd_tick(args) -> int:
-    cfg = load_config()
-    store = Store(cfg.db_path)
-    api_key = resolve_api_key(args.api_key)
-    if not api_key:
-        print(json.dumps({"error": "NO_API_KEY"}))
-        return 2
+def run_tick(cfg, api_key: str, *, maintain_watch: bool = True) -> dict:
+    """One non-blocking advance of the pool. Returns a JSON-able summary.
 
+    Shared by the `tick` CLI and the standing watcher loop (which calls it
+    in-process every poll interval).
+    """
+    store = Store(cfg.db_path)
     with _tick_lock(store) as acquired:
         if not acquired:
-            print(json.dumps({"skipped": "tick-in-progress",
-                              "counts": store.count_status()},
-                             ensure_ascii=False, indent=2))
-            return 0
+            return {"skipped": "tick-in-progress", "counts": store.count_status()}
         dispatch = _dispatch_pending(store, api_key, cfg.concurrency)
         poll = _poll_active(store, api_key, cfg)
         # Persistent, non-consuming drain signal: stays true until a new batch
-        # is enqueued, so a watcher evaluation that fails to fire self-heals on
-        # the next evaluation instead of losing the notification.
+        # is enqueued, so a watcher cycle that fails to report self-heals on
+        # the next cycle instead of losing the notification.
         drained = store.check_drain()
-        # Keep exactly one watch job while work is outstanding; clean it up when
-        # the pool is empty. Best-effort: never fail a tick on watch errors.
         watch_result = {"action": "skipped"}
-        if not getattr(args, "no_watch", False):
+        if maintain_watch:
             try:
                 watch_result = watch.ensure_watch(
                     POOL_SCRIPT, cfg.dataDir,
                     outstanding=store.count_status()["outstanding"])
             except Exception as exc:  # noqa: BLE001
                 watch_result = {"action": "error", "message": str(exc)}
-        out = {
+        return {
             "dispatched": dispatch,
             "polled": poll,
             "drained": drained,
             "watch": watch_result,
             "counts": store.count_status(),
         }
+
+
+def cmd_tick(args) -> int:
+    cfg = load_config()
+    api_key = resolve_api_key(args.api_key)
+    if not api_key:
+        print(json.dumps({"error": "NO_API_KEY"}))
+        return 2
+    out = run_tick(cfg, api_key,
+                   maintain_watch=not getattr(args, "no_watch", False))
     print(json.dumps(out, ensure_ascii=False, indent=2))
     return 0
 

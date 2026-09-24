@@ -1,12 +1,13 @@
 """Watch-job management for the RunningHub task pool.
 
-A single scheduled automation polls the pool and fires once when it drains.
-This module creates/removes that job via the OpenClaw CLI, guaranteeing a
-single instance through a fixed declaration key plus a local record.
+A single standing watcher runs as a supervised stream source. It advances the
+pool every interval and prints a marker line when a batch drains; the stream
+job matches that line and wakes the agent to process results and notify.
 
-The job's trigger script only runs `pool.py tick` (headless, no LLM) and fires
-on the rise of "outstanding == 0". Firing injects a systemEvent into the main
-session and wakes it, so the agent can process results and notify.
+Why not a per-interval trigger script: trigger evaluations run in code mode
+with a 30s budget, are aborted on plugin-runtime refresh ("Plugin runtime
+changed"), and reach a shell via exec (Windows quoting pitfalls). A supervised
+standing process avoids all three. The Gateway restarts it if it dies.
 """
 
 from __future__ import annotations
@@ -23,8 +24,9 @@ SKILL_DIR = SCRIPT_DIR.parents[1]              # runninghub/
 
 WATCH_DECLARATION_KEY = "rh-pool-watch"
 WATCH_NAME = "rh-pool-watch"
-WATCH_EVERY = "30s"
-WATCH_TRIGGER_TEMPLATE = SKILL_DIR / "scripts" / "rh_pool" / "trigger_watch.js"
+WATCH_INTERVAL_S = 60
+WATCH_WATCHER = SKILL_DIR / "scripts" / "rh_pool" / "watcher.py"
+WATCH_MATCH = "RH_POOL_DRAINED"
 WATCH_MESSAGE = (
     "RunningHub 任务池已排空：所有任务都到达终态。"
     "请读取台账（pool status）并处理产物/通知。"
@@ -44,17 +46,6 @@ def _openclaw_bin() -> str | None:
     if cand.exists():
         return str(cand)
     return None
-
-
-def _render_trigger_script(pool_py: Path, data_dir: Path) -> Path:
-    """Write a concrete trigger script with paths substituted in."""
-    template = WATCH_TRIGGER_TEMPLATE.read_text(encoding="utf-8")
-    rendered = (template
-                .replace("<POOL_PY>", str(pool_py))
-                .replace("<PYTHON>", sys.executable))
-    out = data_dir / "watch_trigger.js"
-    out.write_text(rendered, encoding="utf-8")
-    return out
 
 
 def _run_cli(args: list[str], timeout: int = 60) -> tuple[int, str]:
@@ -94,7 +85,7 @@ def remove_job(job_id: str) -> bool:
 
 
 def ensure_watch(pool_py: Path, data_dir: Path, *, outstanding: int) -> dict:
-    """Create the watch job when work is outstanding; no-op otherwise.
+    """Create the standing watcher when work is outstanding; no-op otherwise.
 
     Guarantees at most one instance: existing watch jobs are reused; a stale
     disabled one is removed first, then a fresh job is added under the same
@@ -109,20 +100,24 @@ def ensure_watch(pool_py: Path, data_dir: Path, *, outstanding: int) -> dict:
     existing = find_watch_jobs()
     enabled = [j for j in existing if j.get("enabled", True)]
     if enabled:
-        return {"action": "reuse", "jobId": enabled[0].get("id") or enabled[0].get("jobId")}
+        return {"action": "reuse",
+                "jobId": enabled[0].get("id") or enabled[0].get("jobId")}
 
     # Drop disabled/stale duplicates, then create exactly one.
     for job in existing:
         remove_job(job.get("id") or job.get("jobId"))
 
-    script = _render_trigger_script(pool_py, data_dir)
+    argv = [str(Path(sys.executable)),
+            str(WATCH_WATCHER),
+            "--interval", str(WATCH_INTERVAL_S)]
     args = [
         "automations", "add",
         "--name", WATCH_NAME,
-        "--description", "RunningHub task pool drain watcher (headless trigger)",
-        "--every", WATCH_EVERY,
-        "--trigger-script", str(script),
-        "--trigger-once",
+        "--description", "RunningHub task pool drain watcher (standing process)",
+        "--stream-command", json.dumps(argv),
+        "--stream-cwd", str(SKILL_DIR),
+        "--stream-mode", "match",
+        "--stream-match", WATCH_MATCH,
         "--system-event", WATCH_MESSAGE,
         "--session", "main",
         "--wake", "now",
@@ -139,4 +134,4 @@ def ensure_watch(pool_py: Path, data_dir: Path, *, outstanding: int) -> dict:
                   or (payload.get("job") or {}).get("id"))
     except (ValueError, json.JSONDecodeError):
         pass
-    return {"action": "created", "jobId": job_id, "script": str(script)}
+    return {"action": "created", "jobId": job_id, "argv": argv}
