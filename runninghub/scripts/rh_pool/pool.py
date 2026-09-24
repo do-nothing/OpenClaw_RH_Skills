@@ -26,6 +26,7 @@ sys.path.insert(0, str(SCRIPT_DIR.parents[0]))  # .../scripts
 from rh_pool.client import create_workflow, query_task  # noqa: E402
 from rh_pool.config import load_config  # noqa: E402
 from rh_pool.store import Store, row_to_dict  # noqa: E402
+from rh_pool import workflow_def  # noqa: E402
 from runninghub import resolve_api_key  # noqa: E402
 
 
@@ -166,6 +167,38 @@ def cmd_reconcile(args) -> int:
     return 0
 
 
+def cmd_workflow(args) -> int:
+    """Inspect task-type definitions and validate them against raw exports."""
+    if args.wf_command == "list":
+        types = workflow_def.load_task_types()
+        out = [{
+            "typeId": t.typeId, "displayName": t.displayName,
+            "workflowId": t.workflowId, "instanceType": t.instanceType,
+            "params": [p.name for p in t.params],
+        } for t in types]
+        print(json.dumps({"types": out}, ensure_ascii=False, indent=2))
+        return 0
+
+    if args.wf_command == "info":
+        t = workflow_def.get_task_type(args.type_id)
+        print(json.dumps({
+            "typeId": t.typeId, "version": t.version,
+            "displayName": t.displayName, "description": t.description,
+            "workflowId": t.workflowId, "instanceType": t.instanceType,
+            "params": [vars(p) for p in t.params],
+            "fixedOverrides": t.fixedOverrides,
+        }, ensure_ascii=False, indent=2))
+        return 0
+
+    # validate [typeId]
+    reports = ([workflow_def.validate_type(workflow_def.get_task_type(args.type_id))]
+               if args.type_id else workflow_def.validate_all())
+    payload = [{"typeId": r.typeId, "ok": r.ok,
+                "errors": r.errors, "warnings": r.warnings} for r in reports]
+    print(json.dumps({"reports": payload}, ensure_ascii=False, indent=2))
+    return 0 if all(r.ok for r in reports) else 1
+
+
 def cmd_status(args) -> int:
     cfg = load_config()
     store = Store(cfg.db_path)
@@ -209,6 +242,10 @@ def build_parser() -> argparse.ArgumentParser:
     pr = sub.add_parser("reconcile", help="Resync active tasks with RH")
     pr.add_argument("--api-key", "-k")
 
+    pw = sub.add_parser("workflow", help="Inspect/validate task-type definitions")
+    pw.add_argument("wf_command", choices=["list", "info", "validate"])
+    pw.add_argument("type_id", nargs="?")
+
     ps = sub.add_parser("status", help="Query ledger")
     ps.add_argument("--pool-id", type=int)
     ps.add_argument("--rh-task-id")
@@ -224,6 +261,7 @@ def main(argv: list[str] | None = None) -> int:
         "enqueue": cmd_enqueue,
         "tick": cmd_tick,
         "reconcile": cmd_reconcile,
+        "workflow": cmd_workflow,
         "status": cmd_status,
     }[args.command](args)
 
