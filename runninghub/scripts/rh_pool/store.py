@@ -81,6 +81,7 @@ class Store:
                     updated_at     INTEGER NOT NULL,
                     finished_at    INTEGER,
                     cost_money     REAL,
+                    cost_third_party_money REAL,
                     cost_coins     INTEGER,
                     cost_time_s    INTEGER,
                     error_code     TEXT,
@@ -103,6 +104,8 @@ class Store:
         existing = {r["name"] for r in conn.execute("PRAGMA table_info(tasks)")}
         wanted = {
             "cost_coins": "ALTER TABLE tasks ADD COLUMN cost_coins INTEGER",
+            "cost_third_party_money":
+                "ALTER TABLE tasks ADD COLUMN cost_third_party_money REAL",
         }
         for column, ddl in wanted.items():
             if column not in existing:
@@ -237,6 +240,7 @@ class Store:
                            rh_status: str | None = None,
                            results: list[dict] | None = None,
                            cost_money: float | None = None,
+                           cost_third_party_money: float | None = None,
                            cost_coins: int | None = None,
                            cost_time_s: int | None = None,
                            error_code: str = "",
@@ -249,12 +253,13 @@ class Store:
                 conn.execute(
                     """UPDATE tasks SET status='SUCCESS', results_json=?,
                            cost_money=COALESCE(?, cost_money),
+                           cost_third_party_money=COALESCE(?, cost_third_party_money),
                            cost_coins=COALESCE(?, cost_coins),
                            cost_time_s=COALESCE(?, cost_time_s),
                            finished_at=COALESCE(finished_at, ?), updated_at=?
                        WHERE id=?""",
                     (json.dumps(results or [], ensure_ascii=False), cost_money,
-                     cost_coins, cost_time_s, ts, ts, pool_id),
+                     cost_third_party_money, cost_coins, cost_time_s, ts, ts, pool_id),
                 )
             elif status == "FAILED":
                 conn.execute(

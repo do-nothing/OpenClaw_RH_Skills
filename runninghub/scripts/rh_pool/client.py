@@ -137,15 +137,14 @@ def query_task(api_key: str, task_id: str, timeout: int = 30) -> dict:
 
     if rh_status == "SUCCESS":
         usage = parsed.get("usage") or {}
-        cost = usage.get("consumeMoney")
-        if cost is None:
-            cost = usage.get("thirdPartyConsumeMoney")
         cost_time = usage.get("taskCostTime")
         return {
             "ok": True, "terminal": True, "status": "SUCCESS",
             "rh_status": rh_status,
             "results": parsed.get("results") or [],
-            "cost_money": _as_float(cost),
+            # RunningHub returns up to three cost fields; keep each separately.
+            "cost_money": _as_float(usage.get("consumeMoney")),
+            "cost_third_party_money": _as_float(usage.get("thirdPartyConsumeMoney")),
             "cost_coins": _as_int(usage.get("consumeCoins")),
             "cost_time_s": _as_int(cost_time),
         }

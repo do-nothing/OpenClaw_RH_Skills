@@ -119,6 +119,7 @@ def _poll_active(store: Store, api_key: str) -> dict:
             store.apply_query_result(
                 row["id"], "SUCCESS", results=result.get("results"),
                 cost_money=result.get("cost_money"),
+                cost_third_party_money=result.get("cost_third_party_money"),
                 cost_coins=result.get("cost_coins"),
                 cost_time_s=result.get("cost_time_s"),
             )
