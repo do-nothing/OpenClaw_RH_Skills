@@ -1,8 +1,8 @@
 """SQLite-backed store for the RunningHub async workflow task pool.
 
-Scope: global pool, no project/batch grouping. Completion is detected at the
-pool level (outstanding count drops to 0); an edge latch is armed at enqueue
-time so even very fast tasks cannot miss the completion edge.
+Scope: global pool, no project/batch grouping. Completion is a plain fact -
+`outstanding` drops to 0. The pool does not track "was it reported": the
+polling automation's own existence is that state (see rh_pool/notify.py).
 
 Task status:
   PENDING        enqueued locally, not yet sent to RunningHub
@@ -89,7 +89,8 @@ class Store:
                     error_message  TEXT,
                     results_json   TEXT,
                     inputs_json    TEXT,            -- uploaded inputs (local->rh_file_name)
-                    downloads_json TEXT             -- downloaded output files
+                    downloads_json TEXT,            -- downloaded output files
+                    session_key    TEXT             -- originating session (for wake-back)
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
@@ -118,6 +119,7 @@ class Store:
                 "ALTER TABLE tasks ADD COLUMN cost_third_party_money REAL",
             "inputs_json": "ALTER TABLE tasks ADD COLUMN inputs_json TEXT",
             "downloads_json": "ALTER TABLE tasks ADD COLUMN downloads_json TEXT",
+            "session_key": "ALTER TABLE tasks ADD COLUMN session_key TEXT",
         }
         for column, ddl in wanted.items():
             if column not in existing:
@@ -144,12 +146,14 @@ class Store:
             self._set_meta(conn, key, value)
 
     # --------------------------------------------------------------- enqueue
-    def enqueue(self, jobs: Iterable[dict]) -> list[int]:
+    def enqueue(self, jobs: Iterable[dict],
+                session_key: str | None = None) -> list[int]:
         """Insert jobs as PENDING. Each job:
         workflow_id, instance_type?, node_overrides?(list), request_json?(dict),
         inputs?(list of uploaded-input records).
-        Arms the completion edge so even a task that finishes before the next
-        poll still produces a drain notification.
+
+        session_key records the originating session so the drain can be
+        reported back to it.
         """
         ts = now_ms()
         ids: list[int] = []
@@ -158,8 +162,9 @@ class Store:
                 cur = conn.execute(
                     """
                     INSERT INTO tasks (workflow_id, instance_type, node_overrides,
-                                       request_json, inputs_json, status, updated_at)
-                    VALUES (?, ?, ?, ?, ?, 'PENDING', ?)
+                                       request_json, inputs_json, session_key,
+                                       status, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, 'PENDING', ?)
                     """,
                     (
                         str(job["workflow_id"]),
@@ -167,14 +172,11 @@ class Store:
                         json.dumps(job.get("node_overrides") or [], ensure_ascii=False),
                         json.dumps(job.get("request_json") or {}, ensure_ascii=False),
                         json.dumps(job.get("inputs") or [], ensure_ascii=False),
+                        session_key,
                         ts,
                     ),
                 )
                 ids.append(int(cur.lastrowid))
-            # Arm the completion edge immediately and clear any stale drain
-            # marker from a previous, already-superseded batch.
-            self._set_meta(conn, "armed", "1")
-            self._set_meta(conn, "drain_pending", "0")
         return ids
 
     # ------------------------------------------------------------- retrieval
@@ -332,46 +334,30 @@ class Store:
                 "UPDATE tasks SET downloads_json=?, updated_at=? WHERE id=?",
                 (json.dumps(downloads, ensure_ascii=False), now_ms(), pool_id))
 
-    # ------------------------------------------------------------- edge/notify
-    def check_drain(self) -> bool:
-        """Whether a batch drained and has NOT yet been acknowledged.
+    def latest_session_key(self) -> str | None:
+        """Most recent originating session among all tasks (for wake-back)."""
+        with self._db() as conn:
+            row = conn.execute(
+                "SELECT session_key FROM tasks WHERE session_key IS NOT NULL "
+                "ORDER BY updated_at DESC LIMIT 1"
+            ).fetchone()
+        return row["session_key"] if row else None
 
-        Persistent and non-consuming: once a batch reaches all-terminal while
-        work was armed, `drain_pending` is set and stays set until acknowledged
-        (or cleared by a new enqueue). This makes the signal survive a failed or
-        duplicated watcher evaluation, so a missed notification self-heals on
-        the next evaluation instead of being lost forever.
-        """
+    def distinct_session_keys(self) -> list[str]:
+        """Distinct originating sessions with finished work pending wake-back."""
         with self._db() as conn:
             rows = conn.execute(
-                "SELECT status, COUNT(*) c FROM tasks GROUP BY status"
+                "SELECT DISTINCT session_key FROM tasks "
+                "WHERE session_key IS NOT NULL AND session_key != ''"
             ).fetchall()
-            counts = {r["status"]: r["c"] for r in rows}
-            outstanding = sum(counts.get(s, 0) for s in OUTSTANDING_STATUSES)
+        return [r["session_key"] for r in rows]
 
-            def meta(key: str, default: str = "0") -> str:
-                row = conn.execute(
-                    "SELECT value FROM schema_meta WHERE key=?", (key,)
-                ).fetchone()
-                return row["value"] if row else default
-
-            if outstanding > 0:
-                # Work in flight: (re)arm so the next all-terminal state counts.
-                self._set_meta(conn, "armed", "1")
-            elif meta("armed") == "1":
-                self._set_meta(conn, "drain_pending", "1")
-                self._set_meta(conn, "armed", "0")
-            return meta("drain_pending") == "1"
-
-    def ack_drain(self) -> None:
-        """Clear the pending-drain marker after the batch has been reported."""
+    def clear_session_keys(self) -> None:
+        """Drop wake-back targets after a batch drain has been reported."""
         with self._db() as conn:
-            self._set_meta(conn, "drain_pending", "0")
+            conn.execute("UPDATE tasks SET session_key=NULL "
+                         "WHERE session_key IS NOT NULL")
 
-    def ack_drain(self) -> None:
-        """Clear the pending-drain marker after the batch has been reported."""
-        with self._db() as conn:
-            self._set_meta(conn, "drain_pending", "0")
 
 
 def row_to_dict(row: sqlite3.Row) -> dict[str, Any]:

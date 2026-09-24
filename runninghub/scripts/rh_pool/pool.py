@@ -3,34 +3,31 @@
 Commands:
   enqueue   Add one or more workflow jobs to the global pool (PENDING).
   tick      One non-blocking advance: dispatch within concurrency budget,
-            poll active tasks, write results, report pool-drain edge.
+            poll active tasks, download results.
   status    Query the ledger (counts / task detail).
   reconcile Re-poll all DISPATCHED tasks and sync state (after restart).
 
-Designed to be driven by a headless automation trigger (no LLM): `tick` is
-idempotent, non-blocking, emits JSON, exit code 0. When the pool just drained,
-the trigger fires a systemEvent + wake into the main session.
+The pool is a pure executor + ledger: it answers "accept work" and "is it
+done". Waiting and notification belong to the caller; when a batch drains, a
+short-lived worker wakes the originating session (see rh_pool/notify.py).
 """
 
 from __future__ import annotations
 
 import argparse
-import contextlib
 import json
 import os
 import sys
-import time
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-POOL_SCRIPT = SCRIPT_DIR / "pool.py"
 sys.path.insert(0, str(SCRIPT_DIR))
 sys.path.insert(0, str(SCRIPT_DIR.parents[0]))  # .../scripts
 
 from rh_pool.client import create_workflow, query_task  # noqa: E402
 from rh_pool.config import load_config  # noqa: E402
-from rh_pool.store import Store, now_ms, row_to_dict  # noqa: E402
-from rh_pool import transfer, watch, workflow_def  # noqa: E402
+from rh_pool.store import Store, row_to_dict  # noqa: E402
+from rh_pool import notify, transfer, workflow_def  # noqa: E402
 from runninghub import resolve_api_key  # noqa: E402
 
 
@@ -195,22 +192,28 @@ def cmd_enqueue(args) -> int:
                          ensure_ascii=False), file=sys.stderr)
         return 2
 
-    ids = store.enqueue(resolved)
-    # Auto-arm the drain watcher so a parent skill only needs to enqueue: the
-    # watcher's own tick dispatches and polls, and fires once when the batch
-    # drains. Best-effort: never fail an enqueue because watch setup failed.
-    watch_result = {"action": "skipped"}
-    if not getattr(args, "no_watch", False):
+    ids = store.enqueue(resolved, session_key=_current_session_key())
+    # Ensure the single global polling automation exists so this batch will be
+    # reported when it drains. Best-effort: never fail an enqueue over it.
+    notify_result = {"action": "skipped"}
+    if not getattr(args, "no_notify", False):
         try:
-            watch_result = watch.ensure_watch(
-                POOL_SCRIPT, cfg.dataDir,
-                outstanding=store.count_status()["outstanding"])
+            notify_result = notify.ensure_polling_automation()
         except Exception as exc:  # noqa: BLE001
-            watch_result = {"action": "error", "message": str(exc)}
+            notify_result = {"action": "error", "message": str(exc)}
     print(json.dumps({"enqueued": len(ids), "poolIds": ids,
-                      "watch": watch_result,
+                      "notify": notify_result,
                       "counts": store.count_status()}, ensure_ascii=False, indent=2))
     return 0
+
+
+def _current_session_key() -> str:
+    """Originating session for wake-back.
+
+    The caller (skill/session) may pass OPENCLAW_SESSION_KEY; otherwise default
+    to the main session.
+    """
+    return os.environ.get("OPENCLAW_SESSION_KEY") or notify.DEFAULT_SESSION_KEY
 
 
 def _dispatch_pending(store: Store, api_key: str, concurrency: int) -> dict:
@@ -302,84 +305,19 @@ def _poll_active(store: Store, api_key: str, cfg=None) -> dict:
     return summary
 
 
-# tick single-flight lock: at most one tick may advance the pool at a time.
-TICK_LOCK_STALE_MS = 10 * 60 * 1000
+# tick single-flight lock lives in notify.py (file-based, worker-scoped).
 
 
-@contextlib.contextmanager
-def _tick_lock(store: Store):
-    """Best-effort mutex so two concurrent ticks cannot exceed concurrency.
-
-    Uses a lock row in schema_meta with a staleness guard for crashed runs.
-    Yields True when acquired, False when another tick holds it.
-    """
-    conn = store._new_conn()
-    acquired = False
-    try:
-        conn.isolation_level = None  # manual transaction control
-        conn.execute("BEGIN IMMEDIATE")
-        row = conn.execute(
-            "SELECT value FROM schema_meta WHERE key='tick_lock'"
-        ).fetchone()
-        held = False
-        if row and row["value"]:
-            try:
-                held = (now_ms() - int(row["value"])) < TICK_LOCK_STALE_MS
-            except (ValueError, TypeError):
-                held = False
-        if not held:
-            conn.execute(
-                "INSERT INTO schema_meta(key, value) VALUES('tick_lock', ?) "
-                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                (str(now_ms()),),
-            )
-            acquired = True
-        conn.execute("COMMIT")
-    except Exception:
-        with contextlib.suppress(Exception):
-            conn.execute("ROLLBACK")
-        raise
-    finally:
-        conn.close()
-
-    try:
-        yield acquired
-    finally:
-        if acquired:
-            store.set_meta("tick_lock", "")
-
-
-def run_tick(cfg, api_key: str, *, maintain_watch: bool = True) -> dict:
-    """One non-blocking advance of the pool. Returns a JSON-able summary.
-
-    Shared by the `tick` CLI and the standing watcher loop (which calls it
-    in-process every poll interval).
-    """
+def run_tick(cfg, api_key: str) -> dict:
+    """One non-blocking advance of the pool. Returns a JSON-able summary."""
     store = Store(cfg.db_path)
-    with _tick_lock(store) as acquired:
-        if not acquired:
-            return {"skipped": "tick-in-progress", "counts": store.count_status()}
-        dispatch = _dispatch_pending(store, api_key, cfg.concurrency)
-        poll = _poll_active(store, api_key, cfg)
-        # Persistent, non-consuming drain signal: stays true until a new batch
-        # is enqueued, so a watcher cycle that fails to report self-heals on
-        # the next cycle instead of losing the notification.
-        drained = store.check_drain()
-        watch_result = {"action": "skipped"}
-        if maintain_watch:
-            try:
-                watch_result = watch.ensure_watch(
-                    POOL_SCRIPT, cfg.dataDir,
-                    outstanding=store.count_status()["outstanding"])
-            except Exception as exc:  # noqa: BLE001
-                watch_result = {"action": "error", "message": str(exc)}
-        return {
-            "dispatched": dispatch,
-            "polled": poll,
-            "drained": drained,
-            "watch": watch_result,
-            "counts": store.count_status(),
-        }
+    dispatch = _dispatch_pending(store, api_key, cfg.concurrency)
+    poll = _poll_active(store, api_key, cfg)
+    return {
+        "dispatched": dispatch,
+        "polled": poll,
+        "counts": store.count_status(),
+    }
 
 
 def cmd_tick(args) -> int:
@@ -388,8 +326,7 @@ def cmd_tick(args) -> int:
     if not api_key:
         print(json.dumps({"error": "NO_API_KEY"}))
         return 2
-    out = run_tick(cfg, api_key,
-                   maintain_watch=not getattr(args, "no_watch", False))
+    out = run_tick(cfg, api_key)
     print(json.dumps(out, ensure_ascii=False, indent=2))
     return 0
 
@@ -440,30 +377,6 @@ def cmd_workflow(args) -> int:
     return 0 if all(r.ok for r in reports) else 1
 
 
-def cmd_watch(args) -> int:
-    """Inspect or (re)create the drain watch job."""
-    cfg = load_config()
-    store = Store(cfg.db_path)
-    if args.watch_command == "status":
-        active = watch.find_watch_jobs()
-        print(json.dumps({"jobs": active,
-                          "counts": store.count_status()},
-                         ensure_ascii=False, indent=2))
-        return 0
-    # ensure / remove
-    if args.watch_command == "remove":
-        removed = [j.get("id") or j.get("jobId") for j in watch.find_watch_jobs()]
-        for job_id in removed:
-            if job_id:
-                watch.remove_job(job_id)
-        print(json.dumps({"removed": removed}, ensure_ascii=False, indent=2))
-        return 0
-    result = watch.ensure_watch(POOL_SCRIPT, cfg.dataDir,
-                                outstanding=store.count_status()["outstanding"])
-    print(json.dumps(result, ensure_ascii=False, indent=2))
-    return 0 if result.get("action") != "error" else 1
-
-
 def cmd_status(args) -> int:
     cfg = load_config()
     store = Store(cfg.db_path)
@@ -503,13 +416,11 @@ def build_parser() -> argparse.ArgumentParser:
     pe.add_argument("--node", action="append", help="nodeId:fieldName=value")
     pe.add_argument("--instance-type", choices=["default", "plus", "ultra"])
     pe.add_argument("--from-file", help="JSON file: job or list of jobs")
-    pe.add_argument("--no-watch", action="store_true",
-                    help="Do not create/maintain the drain watch job")
+    pe.add_argument("--no-notify", action="store_true",
+                    help="Do not create the polling automation")
 
     pt = sub.add_parser("tick", help="One non-blocking advance")
     pt.add_argument("--api-key", "-k")
-    pt.add_argument("--no-watch", action="store_true",
-                    help="Do not create/maintain the drain watch job")
 
     pr = sub.add_parser("reconcile", help="Resync active tasks with RH")
     pr.add_argument("--api-key", "-k")
@@ -517,9 +428,6 @@ def build_parser() -> argparse.ArgumentParser:
     pw = sub.add_parser("workflow", help="Inspect/validate task-type definitions")
     pw.add_argument("wf_command", choices=["list", "info", "validate"])
     pw.add_argument("type_id", nargs="?")
-
-    pw2 = sub.add_parser("watch", help="Manage the drain watch job")
-    pw2.add_argument("watch_command", choices=["status", "ensure", "remove"])
 
     ps = sub.add_parser("status", help="Query ledger")
     ps.add_argument("--pool-id", type=int)
@@ -537,7 +445,6 @@ def main(argv: list[str] | None = None) -> int:
         "tick": cmd_tick,
         "reconcile": cmd_reconcile,
         "workflow": cmd_workflow,
-        "watch": cmd_watch,
         "status": cmd_status,
     }[args.command](args)
 
