@@ -29,6 +29,23 @@ NOTIFY_SCRIPT = SCRIPT_DIR / "notify.py"
 sys.path.insert(0, str(SCRIPT_DIR))
 sys.path.insert(0, str(SCRIPT_DIR.parents[0]))  # .../scripts
 
+
+# On Windows a console-subsystem interpreter (python.exe) launched by a
+# console-less service gets a visible console window allocated for it -- one
+# brief black flash per scheduler tick. The GUI-subsystem interpreter
+# (pythonw.exe) allocates no console, so use it for the scheduled command.
+def _python_exe() -> str:
+    if os.name == "nt":
+        w = Path(sys.executable).with_name("pythonw.exe")
+        if w.exists():
+            return str(w)
+    return sys.executable
+
+
+# Never let a child of ours flash a console either.
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) \
+    if os.name == "nt" else 0
+
 AUTOMATION_DECLARATION_KEY = "rh-pool-poll"
 AUTOMATION_NAME = "rh-pool-poll"
 AUTOMATION_EVERY = "30s"
@@ -81,7 +98,9 @@ def _run_cli(args: list[str], timeout: int = 120) -> tuple[int, str]:
         return -1, "openclaw CLI not found (set OPENCLAW_BIN)"
     try:
         proc = subprocess.run([exe, *args], capture_output=True, text=True,
-                              encoding="utf-8", timeout=timeout)
+                              encoding="utf-8", timeout=timeout,
+                              stdin=subprocess.DEVNULL,
+                              creationflags=_NO_WINDOW)
     except Exception as exc:  # noqa: BLE001
         return -1, str(exc)
     return proc.returncode, (proc.stdout or proc.stderr or "")
@@ -113,7 +132,7 @@ def ensure_polling_automation() -> dict:
         return {"action": "reuse",
                 "jobId": existing[0].get("id") or existing[0].get("jobId")}
 
-    argv = [str(Path(sys.executable)), str(NOTIFY_SCRIPT), "launch"]
+    argv = [_python_exe(), str(NOTIFY_SCRIPT), "launch"]
     args = [
         "automations", "add",
         "--name", AUTOMATION_NAME,
@@ -174,7 +193,7 @@ def wake_session(session_key: str, message: str) -> bool:
                     "stderr": subprocess.DEVNULL,
                     "close_fds": True}
     if os.name == "nt":
-        kwargs["creationflags"] = (subprocess.DETACHED_PROCESS
+        kwargs["creationflags"] = (_NO_WINDOW | subprocess.DETACHED_PROCESS
                                    | subprocess.CREATE_NEW_PROCESS_GROUP)
     else:
         kwargs["start_new_session"] = True
@@ -222,15 +241,16 @@ def _release_lock() -> None:
 # ---------------------------------------------------------------------- modes
 def mode_launch() -> int:
     """Fire-and-forget: spawn the worker detached, return immediately."""
-    argv = [str(Path(sys.executable)), str(NOTIFY_SCRIPT), "run"]
+    argv = [_python_exe(), str(NOTIFY_SCRIPT), "run"]
     kwargs: dict = {"cwd": str(POOL_DIR),
                     "stdin": subprocess.DEVNULL,
                     "stdout": subprocess.DEVNULL,
                     "stderr": subprocess.DEVNULL,
                     "close_fds": True}
     if os.name == "nt":
-        # Detach from the parent console so it survives the launcher's exit.
-        kwargs["creationflags"] = (subprocess.DETACHED_PROCESS
+        # Detached + no console window, so neither the launcher's exit kills the
+        # worker nor a black console flashes on every tick.
+        kwargs["creationflags"] = (_NO_WINDOW | subprocess.DETACHED_PROCESS
                                    | subprocess.CREATE_NEW_PROCESS_GROUP)
     else:
         kwargs["start_new_session"] = True
@@ -281,6 +301,11 @@ def mode_run() -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Under pythonw the standard streams may be absent; never let a print crash.
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w")
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w")
     argv = list(sys.argv[1:] if argv is None else argv)
     mode = argv[0] if argv else "run"
     if mode == "launch":
