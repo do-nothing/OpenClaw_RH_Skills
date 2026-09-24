@@ -23,13 +23,14 @@ import time
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
+POOL_SCRIPT = SCRIPT_DIR / "pool.py"
 sys.path.insert(0, str(SCRIPT_DIR))
 sys.path.insert(0, str(SCRIPT_DIR.parents[0]))  # .../scripts
 
 from rh_pool.client import create_workflow, query_task  # noqa: E402
 from rh_pool.config import load_config  # noqa: E402
 from rh_pool.store import Store, now_ms, row_to_dict  # noqa: E402
-from rh_pool import transfer, workflow_def  # noqa: E402
+from rh_pool import transfer, watch, workflow_def  # noqa: E402
 from runninghub import resolve_api_key  # noqa: E402
 
 
@@ -353,10 +354,21 @@ def cmd_tick(args) -> int:
         dispatch = _dispatch_pending(store, api_key, cfg.concurrency)
         poll = _poll_active(store, api_key, cfg)
         drained = store.drain_just_happened()
+        # Keep exactly one watch job while work is outstanding; clean it up when
+        # the pool is empty. Best-effort: never fail a tick on watch errors.
+        watch_result = {"action": "skipped"}
+        if not getattr(args, "no_watch", False):
+            try:
+                watch_result = watch.ensure_watch(
+                    POOL_SCRIPT, cfg.dataDir,
+                    outstanding=store.count_status()["outstanding"])
+            except Exception as exc:  # noqa: BLE001
+                watch_result = {"action": "error", "message": str(exc)}
         out = {
             "dispatched": dispatch,
             "polled": poll,
             "drained": drained,
+            "watch": watch_result,
             "counts": store.count_status(),
         }
     print(json.dumps(out, ensure_ascii=False, indent=2))
@@ -409,6 +421,30 @@ def cmd_workflow(args) -> int:
     return 0 if all(r.ok for r in reports) else 1
 
 
+def cmd_watch(args) -> int:
+    """Inspect or (re)create the drain watch job."""
+    cfg = load_config()
+    store = Store(cfg.db_path)
+    if args.watch_command == "status":
+        active = watch.find_watch_jobs()
+        print(json.dumps({"jobs": active,
+                          "counts": store.count_status()},
+                         ensure_ascii=False, indent=2))
+        return 0
+    # ensure / remove
+    if args.watch_command == "remove":
+        removed = [j.get("id") or j.get("jobId") for j in watch.find_watch_jobs()]
+        for job_id in removed:
+            if job_id:
+                watch.remove_job(job_id)
+        print(json.dumps({"removed": removed}, ensure_ascii=False, indent=2))
+        return 0
+    result = watch.ensure_watch(POOL_SCRIPT, cfg.dataDir,
+                                outstanding=store.count_status()["outstanding"])
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0 if result.get("action") != "error" else 1
+
+
 def cmd_status(args) -> int:
     cfg = load_config()
     store = Store(cfg.db_path)
@@ -451,6 +487,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     pt = sub.add_parser("tick", help="One non-blocking advance")
     pt.add_argument("--api-key", "-k")
+    pt.add_argument("--no-watch", action="store_true",
+                    help="Do not create/maintain the drain watch job")
 
     pr = sub.add_parser("reconcile", help="Resync active tasks with RH")
     pr.add_argument("--api-key", "-k")
@@ -458,6 +496,9 @@ def build_parser() -> argparse.ArgumentParser:
     pw = sub.add_parser("workflow", help="Inspect/validate task-type definitions")
     pw.add_argument("wf_command", choices=["list", "info", "validate"])
     pw.add_argument("type_id", nargs="?")
+
+    pw2 = sub.add_parser("watch", help="Manage the drain watch job")
+    pw2.add_argument("watch_command", choices=["status", "ensure", "remove"])
 
     ps = sub.add_parser("status", help="Query ledger")
     ps.add_argument("--pool-id", type=int)
@@ -475,6 +516,7 @@ def main(argv: list[str] | None = None) -> int:
         "tick": cmd_tick,
         "reconcile": cmd_reconcile,
         "workflow": cmd_workflow,
+        "watch": cmd_watch,
         "status": cmd_status,
     }[args.command](args)
 
