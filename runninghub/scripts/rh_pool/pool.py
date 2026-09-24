@@ -196,7 +196,19 @@ def cmd_enqueue(args) -> int:
         return 2
 
     ids = store.enqueue(resolved)
+    # Auto-arm the drain watcher so a parent skill only needs to enqueue: the
+    # watcher's own tick dispatches and polls, and fires once when the batch
+    # drains. Best-effort: never fail an enqueue because watch setup failed.
+    watch_result = {"action": "skipped"}
+    if not getattr(args, "no_watch", False):
+        try:
+            watch_result = watch.ensure_watch(
+                POOL_SCRIPT, cfg.dataDir,
+                outstanding=store.count_status()["outstanding"])
+        except Exception as exc:  # noqa: BLE001
+            watch_result = {"action": "error", "message": str(exc)}
     print(json.dumps({"enqueued": len(ids), "poolIds": ids,
+                      "watch": watch_result,
                       "counts": store.count_status()}, ensure_ascii=False, indent=2))
     return 0
 
