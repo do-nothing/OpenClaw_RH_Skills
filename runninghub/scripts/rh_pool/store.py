@@ -87,12 +87,22 @@ class Store:
                     error_code     TEXT,
                     error_type     TEXT,
                     error_message  TEXT,
-                    results_json   TEXT
+                    results_json   TEXT,
+                    inputs_json    TEXT,            -- uploaded inputs (local->rh_file_name)
+                    downloads_json TEXT             -- downloaded output files
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_rh_id
                     ON tasks(rh_task_id) WHERE rh_task_id IS NOT NULL;
+
+                CREATE TABLE IF NOT EXISTS uploads (
+                    local_path   TEXT PRIMARY KEY,
+                    size         INTEGER NOT NULL,
+                    mtime        INTEGER NOT NULL,
+                    rh_file_name TEXT NOT NULL,
+                    created_at   INTEGER NOT NULL
+                );
                 """
             )
             self._set_meta(conn, "schema_version", str(SCHEMA_VERSION))
@@ -106,6 +116,8 @@ class Store:
             "cost_coins": "ALTER TABLE tasks ADD COLUMN cost_coins INTEGER",
             "cost_third_party_money":
                 "ALTER TABLE tasks ADD COLUMN cost_third_party_money REAL",
+            "inputs_json": "ALTER TABLE tasks ADD COLUMN inputs_json TEXT",
+            "downloads_json": "ALTER TABLE tasks ADD COLUMN downloads_json TEXT",
         }
         for column, ddl in wanted.items():
             if column not in existing:
@@ -134,7 +146,8 @@ class Store:
     # --------------------------------------------------------------- enqueue
     def enqueue(self, jobs: Iterable[dict]) -> list[int]:
         """Insert jobs as PENDING. Each job:
-        workflow_id, instance_type?, node_overrides?(list), request_json?(dict).
+        workflow_id, instance_type?, node_overrides?(list), request_json?(dict),
+        inputs?(list of uploaded-input records).
         Arms the completion edge so even a task that finishes before the next
         poll still produces a drain notification.
         """
@@ -145,14 +158,15 @@ class Store:
                 cur = conn.execute(
                     """
                     INSERT INTO tasks (workflow_id, instance_type, node_overrides,
-                                       request_json, status, updated_at)
-                    VALUES (?, ?, ?, ?, 'PENDING', ?)
+                                       request_json, inputs_json, status, updated_at)
+                    VALUES (?, ?, ?, ?, ?, 'PENDING', ?)
                     """,
                     (
                         str(job["workflow_id"]),
                         str(job.get("instance_type") or "default"),
                         json.dumps(job.get("node_overrides") or [], ensure_ascii=False),
                         json.dumps(job.get("request_json") or {}, ensure_ascii=False),
+                        json.dumps(job.get("inputs") or [], ensure_ascii=False),
                         ts,
                     ),
                 )
@@ -280,6 +294,42 @@ class Store:
                 else:
                     conn.execute("UPDATE tasks SET updated_at=? WHERE id=?", (ts, pool_id))
 
+    # ------------------------------------------------------- uploads / ledger
+    def find_upload(self, local_path: str, size: int, mtime: int) -> str | None:
+        """Return cached rh_file_name when path+size+mtime match, else None."""
+        with self._db() as conn:
+            row = conn.execute(
+                "SELECT rh_file_name FROM uploads "
+                "WHERE local_path=? AND size=? AND mtime=?",
+                (str(local_path), int(size), int(mtime)),
+            ).fetchone()
+        return row["rh_file_name"] if row else None
+
+    def record_upload(self, local_path: str, size: int, mtime: int,
+                      rh_file_name: str) -> None:
+        with self._db() as conn:
+            conn.execute(
+                "INSERT INTO uploads(local_path, size, mtime, rh_file_name, created_at) "
+                "VALUES(?, ?, ?, ?, ?) "
+                "ON CONFLICT(local_path) DO UPDATE SET "
+                "size=excluded.size, mtime=excluded.mtime, "
+                "rh_file_name=excluded.rh_file_name, created_at=excluded.created_at",
+                (str(local_path), int(size), int(mtime), str(rh_file_name), now_ms()),
+            )
+
+    def set_inputs(self, pool_id: int, inputs: list[dict]) -> None:
+        """Record uploaded inputs: [{param, fieldName, localPath, rhFileName}]."""
+        with self._db() as conn:
+            conn.execute("UPDATE tasks SET inputs_json=?, updated_at=? WHERE id=?",
+                         (json.dumps(inputs, ensure_ascii=False), now_ms(), pool_id))
+
+    def set_downloads(self, pool_id: int, downloads: list[dict]) -> None:
+        """Record downloaded outputs: [{nodeId, url, path, size, outputType}]."""
+        with self._db() as conn:
+            conn.execute(
+                "UPDATE tasks SET downloads_json=?, updated_at=? WHERE id=?",
+                (json.dumps(downloads, ensure_ascii=False), now_ms(), pool_id))
+
     # ------------------------------------------------------------- edge/notify
     def drain_just_happened(self) -> bool:
         """True on the edge: pool had outstanding work (armed at enqueue) and is
@@ -300,7 +350,8 @@ class Store:
 
 def row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
     d = dict(row)
-    for key in ("node_overrides", "request_json", "results_json"):
+    for key in ("node_overrides", "request_json", "results_json",
+                "inputs_json", "downloads_json"):
         if d.get(key):
             try:
                 d[key] = json.loads(d[key])

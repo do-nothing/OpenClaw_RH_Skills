@@ -33,6 +33,7 @@ class PollConfig:
 class PoolConfig:
     concurrency: int = 3
     dataDir: Path = field(default_factory=lambda: SKILL_DIR / "data" / "pool")
+    outputDir: Path | None = None  # defaults to <dataDir>/output
     defaultInstanceType: str = "default"
     notifyText: str = "任务批次已完成"
     poll: PollConfig = field(default_factory=PollConfig)
@@ -40,6 +41,10 @@ class PoolConfig:
     @property
     def db_path(self) -> Path:
         return self.dataDir / "pool.sqlite"
+
+    @property
+    def output_root(self) -> Path:
+        return self.outputDir or (self.dataDir / "output")
 
 
 def _config_path() -> Path | None:
@@ -70,6 +75,10 @@ def load_config() -> PoolConfig:
         p = Path(str(data_dir)).expanduser()
         # Relative paths resolve inside the skill folder (self-contained skill).
         cfg.dataDir = p if p.is_absolute() else SKILL_DIR / p
+    out_dir = raw.get("outputDir")
+    if out_dir:
+        p = Path(str(out_dir)).expanduser()
+        cfg.outputDir = p if p.is_absolute() else SKILL_DIR / p
     poll_raw = raw.get("poll") or {}
     cfg.poll = PollConfig(
         minIntervalMs=int(poll_raw.get("minIntervalMs", cfg.poll.minIntervalMs)),

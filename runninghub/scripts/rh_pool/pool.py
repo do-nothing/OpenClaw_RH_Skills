@@ -15,8 +15,11 @@ the trigger fires a systemEvent + wake into the main session.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
+import os
 import sys
+import time
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -25,8 +28,8 @@ sys.path.insert(0, str(SCRIPT_DIR.parents[0]))  # .../scripts
 
 from rh_pool.client import create_workflow, query_task  # noqa: E402
 from rh_pool.config import load_config  # noqa: E402
-from rh_pool.store import Store, row_to_dict  # noqa: E402
-from rh_pool import workflow_def  # noqa: E402
+from rh_pool.store import Store, now_ms, row_to_dict  # noqa: E402
+from rh_pool import transfer, workflow_def  # noqa: E402
 from runninghub import resolve_api_key  # noqa: E402
 
 
@@ -48,30 +51,150 @@ def parse_node_arg(arg: str) -> dict:
 def build_job_from_args(args) -> dict:
     nodes = [parse_node_arg(n) for n in (args.node or [])]
     instance = args.instance_type or "default"
-    return {
+    job = {
         "workflow_id": args.workflow_id,
         "instance_type": instance,
         "node_overrides": nodes,
-        "request_json": {"workflowId": args.workflow_id, "instanceType": instance},
     }
+    if getattr(args, "output", None):
+        job["outputDir"] = args.output
+    return job
+
+
+def _parse_kv(pairs) -> dict:
+    out: dict = {}
+    for pair in pairs or []:
+        if "=" not in pair:
+            raise ValueError(f"invalid --param '{pair}', expected name=value")
+        k, v = pair.split("=", 1)
+        try:
+            out[k] = json.loads(v)
+        except (json.JSONDecodeError, ValueError):
+            out[k] = v
+    return out
+
+
+def _coerce_scalar(p, value):
+    """Coerce a non-file param value to the type the node expects."""
+    if p.type == "json":
+        return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+    if p.type == "int":
+        return int(value)
+    if p.type == "float":
+        return float(value)
+    if p.type == "bool":
+        return bool(value)
+    if p.type == "enum":
+        if p.enum and value not in p.enum:
+            raise ValueError(f"param '{p.name}'='{value}' not in enum {p.enum}")
+        return value
+    return value if isinstance(value, str) else str(value)
+
+
+def _resolve_job(job: dict, store: Store, api_key: str | None, cfg) -> dict:
+    """Turn a requested job into a stored job: resolve the task type, upload any
+    local file inputs (cached), and build node_overrides. Raises ValueError.
+    """
+    if job.get("type"):
+        t = workflow_def.get_task_type(job["type"])
+        instance = (job.get("instance_type") or t.instanceType
+                    or cfg.defaultInstanceType)
+        params = job.get("params") or {}
+        unknown = set(params) - {p.name for p in t.params}
+        if unknown:
+            raise ValueError(f"unknown params {sorted(unknown)} for type '{t.typeId}'")
+        nodes: list[dict] = []
+        inputs: list[dict] = []
+        for p in t.params:
+            if p.name in params:
+                value = params[p.name]
+            elif p.default is not None:
+                value = p.default
+            elif p.required:
+                raise ValueError(f"type '{t.typeId}': required param '{p.name}' missing")
+            else:
+                continue
+            if p.type in transfer.FILE_TYPES:
+                kind = transfer.classify(value)
+                if kind == "local":
+                    if not api_key:
+                        raise ValueError("no API key available for upload")
+                    up = transfer.upload_with_cache(store, api_key, value)
+                    if not up.get("ok"):
+                        raise ValueError(
+                            f"upload failed for '{p.name}': {up.get('error_message')}")
+                    field_value = up["file_name"]
+                    inputs.append({"param": p.name, "fieldName": p.fieldName,
+                                   "localPath": str(Path(value).resolve()),
+                                   "rhFileName": up["file_name"],
+                                   "cached": bool(up.get("cached"))})
+                elif kind in ("rh_id", "url"):
+                    field_value = value
+                    inputs.append({"param": p.name, "fieldName": p.fieldName,
+                                   "localPath": None, "rhFileName": value,
+                                   "cached": True})
+                else:
+                    raise ValueError(
+                        f"param '{p.name}': file not found or unusable: {value!r}")
+            else:
+                field_value = _coerce_scalar(p, value)
+            nodes.append({"nodeId": p.nodeId, "fieldName": p.fieldName,
+                          "fieldValue": field_value})
+        nodes.extend(t.fixedOverrides)
+        request = {"type": t.typeId, "workflowId": t.workflowId,
+                   "instanceType": instance}
+        if job.get("outputDir"):
+            request["outputDir"] = job["outputDir"]
+        return {"workflow_id": t.workflowId, "instance_type": instance,
+                "node_overrides": nodes, "request_json": request,
+                "inputs": inputs}
+
+    # Raw mode: caller supplies workflow_id + ready node values (rh ids / urls
+    # or plain scalars); no upload logic is applied.
+    if not job.get("workflow_id"):
+        raise ValueError("job needs 'type' or 'workflow_id'")
+    instance = job.get("instance_type") or cfg.defaultInstanceType
+    request = {"workflowId": job["workflow_id"], "instanceType": instance}
+    if job.get("outputDir"):
+        request["outputDir"] = job["outputDir"]
+    return {"workflow_id": job["workflow_id"], "instance_type": instance,
+            "node_overrides": job.get("node_overrides") or [],
+            "request_json": request, "inputs": job.get("inputs") or []}
 
 
 # ------------------------------------------------------------------- commands
 def cmd_enqueue(args) -> int:
-    jobs: list[dict]
+    cfg = load_config()
+    store = Store(cfg.db_path)
+
     if args.from_file:
         jobs = json.loads(Path(args.from_file).read_text(encoding="utf-8"))
         if isinstance(jobs, dict):
             jobs = [jobs]
     else:
-        if not args.workflow_id:
-            print("enqueue requires --workflow-id or --from-file", file=sys.stderr)
+        if args.type:
+            jobs = [{"type": args.type, "params": _parse_kv(args.param),
+                     "instance_type": args.instance_type,
+                     "outputDir": args.output}]
+        elif args.workflow_id:
+            jobs = [build_job_from_args(args)]
+        else:
+            print("enqueue requires --type, --workflow-id, or --from-file",
+                  file=sys.stderr)
             return 2
-        jobs = [build_job_from_args(args)]
 
-    cfg = load_config()
-    store = Store(cfg.db_path)
-    ids = store.enqueue(jobs)
+    # Uploads (for typed jobs with local file inputs) need the API key.
+    api_key = resolve_api_key(None)
+    resolved: list[dict] = []
+    try:
+        for job in jobs:
+            resolved.append(_resolve_job(job, store, api_key, cfg))
+    except (ValueError, workflow_def.DefinitionError) as exc:
+        print(json.dumps({"error": "ENQUEUE_REJECTED", "message": str(exc)},
+                         ensure_ascii=False), file=sys.stderr)
+        return 2
+
+    ids = store.enqueue(resolved)
     print(json.dumps({"enqueued": len(ids), "poolIds": ids,
                       "counts": store.count_status()}, ensure_ascii=False, indent=2))
     return 0
@@ -103,8 +226,34 @@ def _dispatch_pending(store: Store, api_key: str, concurrency: int) -> dict:
     return summary
 
 
-def _poll_active(store: Store, api_key: str) -> dict:
-    summary = {"succeeded": 0, "failed": 0, "pending": 0, "poll_errors": 0}
+def _download_outputs(store: Store, row, results: list[dict], cfg) -> list[dict]:
+    """Download result files for a finished task into the output tree.
+
+    Layout: <output_root>/<poolId>_<nodeId>_<idx>.<ext>  (or per-job outputDir).
+    """
+    req = _loads(row["request_json"]) or {}
+    base = Path(req.get("outputDir")) if req.get("outputDir") else (cfg.output_root / str(row["id"]))
+    downloads: list[dict] = []
+    for idx, item in enumerate(results or []):
+        url = item.get("url") or item.get("outputUrl")
+        if not url:
+            continue
+        ext = item.get("outputType") or "bin"
+        node = item.get("nodeId") or "out"
+        target = base / f"{row['id']}_{node}_{idx}.{ext}"
+        dl = transfer.download_file(url, str(target))
+        record = {"nodeId": node, "url": url, "outputType": ext,
+                  "path": dl.get("path"), "size": dl.get("size"),
+                  "ok": bool(dl.get("ok"))}
+        if not dl.get("ok"):
+            record["error"] = dl.get("error_message")
+        downloads.append(record)
+    return downloads
+
+
+def _poll_active(store: Store, api_key: str, cfg=None) -> dict:
+    summary = {"succeeded": 0, "failed": 0, "pending": 0, "poll_errors": 0,
+               "downloaded": 0, "download_errors": 0}
     for row in store.get_active():
         result = query_task(api_key, row["rh_task_id"])
         if not result.get("ok"):
@@ -124,6 +273,12 @@ def _poll_active(store: Store, api_key: str) -> dict:
                 cost_time_s=result.get("cost_time_s"),
             )
             summary["succeeded"] += 1
+            # Auto-download results (best effort; failure does not void success).
+            if cfg is not None and result.get("results"):
+                downloads = _download_outputs(store, row, result["results"], cfg)
+                store.set_downloads(row["id"], downloads)
+                summary["downloaded"] += sum(1 for d in downloads if d.get("ok"))
+                summary["download_errors"] += sum(1 for d in downloads if not d.get("ok"))
         else:
             store.apply_query_result(
                 row["id"], "FAILED", error_code=result.get("error_code", ""),
@@ -134,6 +289,53 @@ def _poll_active(store: Store, api_key: str) -> dict:
     return summary
 
 
+# tick single-flight lock: at most one tick may advance the pool at a time.
+TICK_LOCK_STALE_MS = 10 * 60 * 1000
+
+
+@contextlib.contextmanager
+def _tick_lock(store: Store):
+    """Best-effort mutex so two concurrent ticks cannot exceed concurrency.
+
+    Uses a lock row in schema_meta with a staleness guard for crashed runs.
+    Yields True when acquired, False when another tick holds it.
+    """
+    conn = store._new_conn()
+    acquired = False
+    try:
+        conn.isolation_level = None  # manual transaction control
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT value FROM schema_meta WHERE key='tick_lock'"
+        ).fetchone()
+        held = False
+        if row and row["value"]:
+            try:
+                held = (now_ms() - int(row["value"])) < TICK_LOCK_STALE_MS
+            except (ValueError, TypeError):
+                held = False
+        if not held:
+            conn.execute(
+                "INSERT INTO schema_meta(key, value) VALUES('tick_lock', ?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (str(now_ms()),),
+            )
+            acquired = True
+        conn.execute("COMMIT")
+    except Exception:
+        with contextlib.suppress(Exception):
+            conn.execute("ROLLBACK")
+        raise
+    finally:
+        conn.close()
+
+    try:
+        yield acquired
+    finally:
+        if acquired:
+            store.set_meta("tick_lock", "")
+
+
 def cmd_tick(args) -> int:
     cfg = load_config()
     store = Store(cfg.db_path)
@@ -142,15 +344,21 @@ def cmd_tick(args) -> int:
         print(json.dumps({"error": "NO_API_KEY"}))
         return 2
 
-    dispatch = _dispatch_pending(store, api_key, cfg.concurrency)
-    poll = _poll_active(store, api_key)
-    drained = store.drain_just_happened()
-    out = {
-        "dispatched": dispatch,
-        "polled": poll,
-        "drained": drained,
-        "counts": store.count_status(),
-    }
+    with _tick_lock(store) as acquired:
+        if not acquired:
+            print(json.dumps({"skipped": "tick-in-progress",
+                              "counts": store.count_status()},
+                             ensure_ascii=False, indent=2))
+            return 0
+        dispatch = _dispatch_pending(store, api_key, cfg.concurrency)
+        poll = _poll_active(store, api_key, cfg)
+        drained = store.drain_just_happened()
+        out = {
+            "dispatched": dispatch,
+            "polled": poll,
+            "drained": drained,
+            "counts": store.count_status(),
+        }
     print(json.dumps(out, ensure_ascii=False, indent=2))
     return 0
 
@@ -163,7 +371,7 @@ def cmd_reconcile(args) -> int:
     if not api_key:
         print(json.dumps({"error": "NO_API_KEY"}))
         return 2
-    poll = _poll_active(store, api_key)
+    poll = _poll_active(store, api_key, cfg)
     print(json.dumps({"reconciled": poll, "counts": store.count_status()},
                      ensure_ascii=False, indent=2))
     return 0
@@ -233,6 +441,9 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="command", required=True)
 
     pe = sub.add_parser("enqueue", help="Add workflow job(s)")
+    pe.add_argument("--type", help="Task type id from task-types.json")
+    pe.add_argument("--param", action="append", help="name=value (repeatable)")
+    pe.add_argument("--output", help="Output dir for this job's downloads")
     pe.add_argument("--workflow-id")
     pe.add_argument("--node", action="append", help="nodeId:fieldName=value")
     pe.add_argument("--instance-type", choices=["default", "plus", "ultra"])
