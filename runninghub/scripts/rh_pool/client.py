@@ -146,6 +146,7 @@ def query_task(api_key: str, task_id: str, timeout: int = 30) -> dict:
             "rh_status": rh_status,
             "results": parsed.get("results") or [],
             "cost_money": _as_float(cost),
+            "cost_coins": _as_int(usage.get("consumeCoins")),
             "cost_time_s": _as_int(cost_time),
         }
 
