@@ -32,15 +32,19 @@ ET_RENDER = "RENDER_FAILED"
 ET_RATELIMIT = "RATE_LIMIT"
 ET_NETWORK = "NETWORK"
 ET_UNKNOWN = "UNKNOWN"
+ET_TASK_NOT_FOUND = "TASK_NOT_FOUND"
 
 _AUTH_HINTS = ("auth", "401", "403", "token", "unauthor", "鉴权", "授权")
 _BALANCE_HINTS = ("balance", "insufficient", "余额", "credit", "欠费", "arreas")
 _WORKFLOW_HINTS = ("workflow", "node", "param", "invalid", "validate", "工作流", "节点", "参数")
 _RATELIMIT_HINTS = ("rate limit", "ratelimit", "too many", "frequency", "频繁", "限流", "429")
+_NOTFOUND_HINTS = ("not found", "does not exist", "不存在", "过期", "expired", "已删除")
 
 
 def classify_error(code: Any = "", message: Any = "") -> str:
     text = f"{code} {message}".lower()
+    if any(k in text for k in _NOTFOUND_HINTS):
+        return ET_TASK_NOT_FOUND
     if any(k in text for k in _AUTH_HINTS):
         return ET_AUTH
     if any(k in text for k in _BALANCE_HINTS):
@@ -160,8 +164,25 @@ def query_task(api_key: str, task_id: str, timeout: int = 30) -> dict:
         }
 
     # QUEUED / RUNNING / anything not terminal
+    if rh_status in ("QUEUED", "RUNNING"):
+        return {"ok": True, "terminal": False, "status": "PENDING",
+                "rh_status": rh_status}
+
+    # Empty/unknown status: inspect the error envelope. A task that is gone
+    # (cancelled/expired/purged) must become terminal, otherwise the pool could
+    # never drain. Hard errors (auth/balance/workflow) are terminal too;
+    # everything else is treated as transient and retried on the next poll.
+    code = parsed.get("errorCode", "")
+    msg = parsed.get("errorMessage", "")
+    etype = classify_error(code, msg)
+    if etype == ET_TASK_NOT_FOUND or etype in (ET_AUTH, ET_BALANCE, ET_WORKFLOW):
+        return {
+            "ok": True, "terminal": True, "status": "FAILED",
+            "rh_status": rh_status or "UNKNOWN", "error_code": str(code),
+            "error_type": etype, "error_message": str(msg) or "task status unknown",
+        }
     return {"ok": True, "terminal": False, "status": "PENDING",
-            "rh_status": rh_status}
+            "rh_status": rh_status or "UNKNOWN"}
 
 
 def _as_float(value) -> float | None:
