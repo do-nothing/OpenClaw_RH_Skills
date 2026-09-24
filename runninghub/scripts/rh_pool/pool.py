@@ -353,7 +353,10 @@ def cmd_tick(args) -> int:
             return 0
         dispatch = _dispatch_pending(store, api_key, cfg.concurrency)
         poll = _poll_active(store, api_key, cfg)
-        drained = store.drain_just_happened()
+        # Persistent, non-consuming drain signal: stays true until a new batch
+        # is enqueued, so a watcher evaluation that fails to fire self-heals on
+        # the next evaluation instead of losing the notification.
+        drained = store.check_drain()
         # Keep exactly one watch job while work is outstanding; clean it up when
         # the pool is empty. Best-effort: never fail a tick on watch errors.
         watch_result = {"action": "skipped"}
@@ -484,6 +487,8 @@ def build_parser() -> argparse.ArgumentParser:
     pe.add_argument("--node", action="append", help="nodeId:fieldName=value")
     pe.add_argument("--instance-type", choices=["default", "plus", "ultra"])
     pe.add_argument("--from-file", help="JSON file: job or list of jobs")
+    pe.add_argument("--no-watch", action="store_true",
+                    help="Do not create/maintain the drain watch job")
 
     pt = sub.add_parser("tick", help="One non-blocking advance")
     pt.add_argument("--api-key", "-k")

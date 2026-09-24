@@ -171,8 +171,10 @@ class Store:
                     ),
                 )
                 ids.append(int(cur.lastrowid))
-            # Arm the completion edge immediately.
+            # Arm the completion edge immediately and clear any stale drain
+            # marker from a previous, already-superseded batch.
             self._set_meta(conn, "armed", "1")
+            self._set_meta(conn, "drain_pending", "0")
         return ids
 
     # ------------------------------------------------------------- retrieval
@@ -331,21 +333,45 @@ class Store:
                 (json.dumps(downloads, ensure_ascii=False), now_ms(), pool_id))
 
     # ------------------------------------------------------------- edge/notify
-    def drain_just_happened(self) -> bool:
-        """True on the edge: pool had outstanding work (armed at enqueue) and is
-        fully terminal now. The latch is re-armed automatically whenever new
-        tasks are enqueued.
+    def check_drain(self) -> bool:
+        """Whether a batch drained and has NOT yet been acknowledged.
+
+        Persistent and non-consuming: once a batch reaches all-terminal while
+        work was armed, `drain_pending` is set and stays set until acknowledged
+        (or cleared by a new enqueue). This makes the signal survive a failed or
+        duplicated watcher evaluation, so a missed notification self-heals on
+        the next evaluation instead of being lost forever.
         """
-        outstanding = self.count_status()["outstanding"]
         with self._db() as conn:
+            rows = conn.execute(
+                "SELECT status, COUNT(*) c FROM tasks GROUP BY status"
+            ).fetchall()
+            counts = {r["status"]: r["c"] for r in rows}
+            outstanding = sum(counts.get(s, 0) for s in OUTSTANDING_STATUSES)
+
+            def meta(key: str, default: str = "0") -> str:
+                row = conn.execute(
+                    "SELECT value FROM schema_meta WHERE key=?", (key,)
+                ).fetchone()
+                return row["value"] if row else default
+
             if outstanding > 0:
-                # Defensive re-arm while work is still in flight.
+                # Work in flight: (re)arm so the next all-terminal state counts.
                 self._set_meta(conn, "armed", "1")
-                return False
-            if self.get_meta("armed", "0") == "1":
+            elif meta("armed") == "1":
+                self._set_meta(conn, "drain_pending", "1")
                 self._set_meta(conn, "armed", "0")
-                return True
-            return False
+            return meta("drain_pending") == "1"
+
+    def ack_drain(self) -> None:
+        """Clear the pending-drain marker after the batch has been reported."""
+        with self._db() as conn:
+            self._set_meta(conn, "drain_pending", "0")
+
+    def ack_drain(self) -> None:
+        """Clear the pending-drain marker after the batch has been reported."""
+        with self._db() as conn:
+            self._set_meta(conn, "drain_pending", "0")
 
 
 def row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
