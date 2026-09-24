@@ -19,8 +19,7 @@ from pathlib import Path
 
 # scripts/rh_pool/config.py -> scripts -> runninghub (skill dir)
 SKILL_DIR = Path(__file__).resolve().parents[2]
-# When installed: <workspace>/skills/runninghub -> parents[2] of skill = workspace
-WORKSPACE_DIR = SKILL_DIR.parents[1]
+CONFIG_DIR = SKILL_DIR / "config"
 
 
 @dataclass
@@ -33,7 +32,7 @@ class PollConfig:
 @dataclass
 class PoolConfig:
     concurrency: int = 3
-    dataDir: Path = field(default_factory=lambda: WORKSPACE_DIR / "data" / "runninghub-pool")
+    dataDir: Path = field(default_factory=lambda: SKILL_DIR / "data" / "pool")
     defaultInstanceType: str = "default"
     notifyText: str = "任务批次已完成"
     poll: PollConfig = field(default_factory=PollConfig)
@@ -48,7 +47,7 @@ def _config_path() -> Path | None:
     if env_path:
         p = Path(env_path)
         return p if p.exists() else None
-    p = SKILL_DIR / "skill-config.json"
+    p = CONFIG_DIR / "skill-config.json"
     return p if p.exists() else None
 
 
@@ -68,7 +67,9 @@ def load_config() -> PoolConfig:
     # Explicit env override for data dir is handy in dev / tests.
     data_dir = os.environ.get("RH_POOL_DATA_DIR") or raw.get("dataDir")
     if data_dir:
-        cfg.dataDir = Path(str(data_dir)).expanduser()
+        p = Path(str(data_dir)).expanduser()
+        # Relative paths resolve inside the skill folder (self-contained skill).
+        cfg.dataDir = p if p.is_absolute() else SKILL_DIR / p
     poll_raw = raw.get("poll") or {}
     cfg.poll = PollConfig(
         minIntervalMs=int(poll_raw.get("minIntervalMs", cfg.poll.minIntervalMs)),
