@@ -8,11 +8,16 @@ Script: `python3 {baseDir}/scripts/rh_pool/pool.py`
 
 ## When to use
 
+**Any workflow task goes here — a single one counts.** Do not look for a
+standard-API endpoint for 语音克隆 / 数字人 / 文生图 workflows.
+
+- User asks for a **workflow type** (语音克隆 / 数字人 / 文生图, any single job)
 - User wants **several generations** at once ("跑 3 个", "批量", "都生成一遍")
 - A task is **slow** and the user keeps chatting (video / digital human / 3D / music)
 - User asks for **progress** on submitted work
 
-Otherwise use the normal single-task flow in `SKILL.md`.
+The standard-API single-task flow in `SKILL.md` is only for endpoints that are
+not pool workflow types.
 
 ## Task types
 
@@ -48,8 +53,10 @@ python3 {baseDir}/scripts/rh_pool/pool.py enqueue --from-file jobs.json
 ]
 ```
 
-`enqueue` returns `poolIds`. **Submitting is the whole job for you** — no need to
-poll. Tell the user it started (see notification rules below), then reply `NO_REPLY`.
+`enqueue` returns `poolIds`. **Submitting is the whole job for you** — your turn
+ends here. Do NOT poll `status`, sleep, or wait for completion in-loop; the pool
+wakes this session when the batch drains. Tell the user it started (see
+notification rules below), then end the turn.
 
 To have the finished batch wake a specific session, set `OPENCLAW_SESSION_KEY`
 before enqueueing; otherwise it wakes the configured default (`sessionKey`).

@@ -38,3 +38,5 @@ Thumbs.db
 /runninghub/data/pool/
 # Local self-tests (not shipped)
 /runninghub/tests/
+# Runtime resources (images, audio, video)
+/runninghub/data/resources/
