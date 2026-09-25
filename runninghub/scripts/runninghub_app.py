@@ -32,7 +32,14 @@ SUBMIT_PATH = "/task/openapi/ai-app/run"
 SCRIPT_DIR = Path(__file__).resolve().parent
 
 sys.path.insert(0, str(SCRIPT_DIR))
-from runninghub import resolve_api_key, require_api_key, cmd_check, poll_task, fix_mov_to_mp4  # noqa: E402
+from runninghub import (  # noqa: E402
+    NO_WINDOW,
+    cmd_check,
+    fix_mov_to_mp4,
+    poll_task,
+    require_api_key,
+    resolve_api_key,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -41,7 +48,8 @@ from runninghub import resolve_api_key, require_api_key, cmd_check, poll_task, f
 
 def curl_get(url: str, timeout: int = 30) -> subprocess.CompletedProcess:
     cmd = ["curl", "-s", "-S", "--fail-with-body", "--max-time", str(timeout), url]
-    return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8")
+    return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
+                          stdin=subprocess.DEVNULL, creationflags=NO_WINDOW)
 
 
 def curl_post_json(url: str, payload: dict, timeout: int = 60) -> subprocess.CompletedProcess:
@@ -56,7 +64,8 @@ def curl_post_json(url: str, payload: dict, timeout: int = 60) -> subprocess.Com
             "-H", f"Host: {API_HOST.split('//')[1]}",
             "-d", f"@{tmp_path}",
         ]
-        return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8")
+        return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
+                              stdin=subprocess.DEVNULL, creationflags=NO_WINDOW)
     finally:
         os.unlink(tmp_path)
 
@@ -70,7 +79,8 @@ def curl_upload(url: str, api_key: str, file_path: str, timeout: int = 120) -> s
         "-F", "fileType=input",
         "-F", f"file=@{file_path}",
     ]
-    return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8")
+    return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
+                          stdin=subprocess.DEVNULL, creationflags=NO_WINDOW)
 
 
 def _parse_response(result: subprocess.CompletedProcess, context: str) -> dict:
@@ -124,7 +134,8 @@ def list_apps(api_key: str, sort: str = "RECOMMEND", size: int = 10,
             "-H", f"Authorization: {api_key}",
             "-d", f"@{tmp_path}",
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8")
+        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
+                                stdin=subprocess.DEVNULL, creationflags=NO_WINDOW)
     finally:
         os.unlink(tmp_path)
 
@@ -249,7 +260,8 @@ def submit_task(api_key: str, webapp_id: str, node_info_list: list[dict],
 def download_file(url: str, output_path: str) -> str:
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     cmd = ["curl", "-s", "-S", "-L", "-o", output_path, "--max-time", "300", url]
-    result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8")
+    result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
+                            stdin=subprocess.DEVNULL, creationflags=NO_WINDOW)
     if result.returncode != 0:
         print(f"Download failed: {result.stderr}", file=sys.stderr)
         sys.exit(1)
@@ -318,7 +330,8 @@ def _download_cover(url: str, out_path: str) -> bool:
         return False
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     cmd = ["curl", "-s", "-S", "-L", "-o", out_path, "--max-time", "15", url]
-    result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8")
+    result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
+                            stdin=subprocess.DEVNULL, creationflags=NO_WINDOW)
     return result.returncode == 0 and Path(out_path).exists() and Path(out_path).stat().st_size > 0
 
 

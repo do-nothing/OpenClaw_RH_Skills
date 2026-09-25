@@ -24,6 +24,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR.parents[0]))  # .../scripts
 
 from rh_pool.client import ET_NETWORK, classify_error  # noqa: E402
+from runninghub import NO_WINDOW  # noqa: E402
 
 API_HOST = "https://www.runninghub.cn"
 UPLOAD_PATH = "/task/openapi/upload"
@@ -72,7 +73,8 @@ def upload_file(api_key: str, file_path: str, timeout: int = 300) -> dict:
         "--max-time", str(timeout),
     ]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8")
+        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
+                                stdin=subprocess.DEVNULL, creationflags=NO_WINDOW)
     except Exception as exc:
         return {"ok": False, "error_type": ET_NETWORK,
                 "error_message": str(exc), "raw": ""}
@@ -122,7 +124,8 @@ def download_file(url: str, output_path: str, timeout: int = 600) -> dict:
     out.parent.mkdir(parents=True, exist_ok=True)
     cmd = ["curl", "-s", "-S", "-L", "-o", str(out), "--max-time", str(timeout), url]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8")
+        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
+                                stdin=subprocess.DEVNULL, creationflags=NO_WINDOW)
     except Exception as exc:
         return {"ok": False, "error_type": ET_NETWORK, "error_message": str(exc)}
     if result.returncode != 0 or not out.exists() or out.stat().st_size == 0:
