@@ -39,6 +39,11 @@ POLL_INTERVAL = 5
 # flash. Ask the OS not to create one. 0 elsewhere, where it is ignored.
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
 
+# Cross-platform scratch dir used when no --output is given. On POSIX this is
+# the documented /tmp/openclaw/rh-output; on Windows there is no /tmp, so use
+# the real temp dir instead of a bogus C:\tmp.
+DEFAULT_OUTPUT_DIR = Path(tempfile.gettempdir()) / "openclaw" / "rh-output"
+
 SCRIPT_DIR = Path(__file__).resolve().parent
 DATA_DIR = SCRIPT_DIR.parent / "data"
 CAPABILITIES_PATH = DATA_DIR / "capabilities.json"
@@ -675,7 +680,7 @@ def cmd_execute(args):
     output_path = args.output
     if not output_path:
         ext = output_type_ext or _guess_ext(endpoint_def["output_type"])
-        output_path = f"/tmp/openclaw/rh-output/result.{ext}"
+        output_path = str(DEFAULT_OUTPUT_DIR / f"result.{ext}")
 
     if output_type_ext:
         output_path = str(Path(output_path).with_suffix(f".{output_type_ext}"))

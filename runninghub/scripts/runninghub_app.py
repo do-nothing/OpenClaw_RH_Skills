@@ -33,6 +33,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 
 sys.path.insert(0, str(SCRIPT_DIR))
 from runninghub import (  # noqa: E402
+    DEFAULT_OUTPUT_DIR,
     NO_WINDOW,
     cmd_check,
     fix_mov_to_mp4,
@@ -339,7 +340,7 @@ def cmd_list(api_key: str, sort: str, size: int, page: int, days: int):
     data = list_apps(api_key, sort, size, page, days)
     records = data.get("records", [])
 
-    cover_dir = Path("/tmp/openclaw/rh-output/app_covers")
+    cover_dir = DEFAULT_OUTPUT_DIR / "app_covers"
     cover_dir.mkdir(parents=True, exist_ok=True)
 
     apps = []
@@ -445,7 +446,7 @@ def cmd_run(args):
                 suffix = Path(output_base).suffix or f".{ext}"
                 out_path = str(Path(output_base).parent / f"{stem}_{i+1}{suffix}")
         else:
-            out_path = f"/tmp/openclaw/rh-output/app_result_{i+1}.{ext}"
+            out_path = str(DEFAULT_OUTPUT_DIR / f"app_result_{i+1}.{ext}")
 
         if ext:
             out_path = str(Path(out_path).with_suffix(f".{ext}"))
