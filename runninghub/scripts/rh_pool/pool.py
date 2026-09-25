@@ -210,10 +210,10 @@ def cmd_enqueue(args) -> int:
 def _current_session_key() -> str:
     """Originating session for wake-back.
 
-    The caller (skill/session) may pass OPENCLAW_SESSION_KEY; otherwise default
-    to the main session.
+    The caller (skill/session) may pass OPENCLAW_SESSION_KEY; otherwise use the
+    configured default (config.sessionKey).
     """
-    return os.environ.get("OPENCLAW_SESSION_KEY") or notify.DEFAULT_SESSION_KEY
+    return os.environ.get("OPENCLAW_SESSION_KEY") or notify.default_session_key()
 
 
 def _dispatch_pending(store: Store, api_key: str, concurrency: int) -> dict:

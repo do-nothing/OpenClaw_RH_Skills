@@ -2,7 +2,7 @@
 
 Resolution order:
   1. RH_POOL_CONFIG env var -> explicit config JSON path
-  2. <skill_dir>/skill-config.json
+  2. <skill_dir>/config/skill-config.json
   3. Built-in defaults
 
 The API key is NOT handled here; it is resolved by the existing runninghub
@@ -23,20 +23,13 @@ CONFIG_DIR = SKILL_DIR / "config"
 
 
 @dataclass
-class PollConfig:
-    minIntervalMs: int = 30_000
-    pacingMinMs: int = 30_000
-    pacingMaxMs: int = 120_000
-
-
-@dataclass
 class PoolConfig:
     concurrency: int = 3
     dataDir: Path = field(default_factory=lambda: SKILL_DIR / "data" / "pool")
-    outputDir: Path | None = None  # defaults to <dataDir>/output
+    outputDir: Path | None = None              # defaults to <dataDir>/output
     defaultInstanceType: str = "default"
-    notifyText: str = "任务批次已完成"
-    poll: PollConfig = field(default_factory=PollConfig)
+    pollIntervalSeconds: int = 30              # polling automation cadence
+    sessionKey: str = "agent:main:main"        # default wake-back target
 
     @property
     def db_path(self) -> Path:
@@ -67,8 +60,10 @@ def load_config() -> PoolConfig:
         cfg.concurrency = max(1, int(raw["concurrency"]))
     if "defaultInstanceType" in raw:
         cfg.defaultInstanceType = str(raw["defaultInstanceType"])
-    if "notifyText" in raw:
-        cfg.notifyText = str(raw["notifyText"])
+    if "pollIntervalSeconds" in raw:
+        cfg.pollIntervalSeconds = max(5, int(raw["pollIntervalSeconds"]))
+    if "sessionKey" in raw:
+        cfg.sessionKey = str(raw["sessionKey"])
     # Explicit env override for data dir is handy in dev / tests.
     data_dir = os.environ.get("RH_POOL_DATA_DIR") or raw.get("dataDir")
     if data_dir:
@@ -79,10 +74,4 @@ def load_config() -> PoolConfig:
     if out_dir:
         p = Path(str(out_dir)).expanduser()
         cfg.outputDir = p if p.is_absolute() else SKILL_DIR / p
-    poll_raw = raw.get("poll") or {}
-    cfg.poll = PollConfig(
-        minIntervalMs=int(poll_raw.get("minIntervalMs", cfg.poll.minIntervalMs)),
-        pacingMinMs=int(poll_raw.get("pacingMinMs", cfg.poll.pacingMinMs)),
-        pacingMaxMs=int(poll_raw.get("pacingMaxMs", cfg.poll.pacingMaxMs)),
-    )
     return cfg

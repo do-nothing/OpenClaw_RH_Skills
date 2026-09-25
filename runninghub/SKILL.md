@@ -74,12 +74,19 @@ Quick check: `python3 {baseDir}/scripts/runninghub.py --check`
 | Video understand | `rhart-text-g-25-pro/video-to-text` | |
 | **AI Application** | **⚠️ Read `{baseDir}/references/ai-application.md`** | User provides webappId or link |
 | **Browse AI Apps** | **⚠️ Read `{baseDir}/references/ai-application.md`** | "有什么应用" / "最热门" / "最新" / "推荐" |
+| **Batch / async (multi-task)** | **⚠️ Read `{baseDir}/references/task-pool.md`** | "批量"/"跑 N 个" or slow jobs to run in background |
 
 ## AI Application
 
 When user mentions "AI应用", "workflow", "webappId", pastes a RunningHub AI app link,
 or asks to browse/discover apps ("有什么应用", "最热门的", "最新的", "推荐什么") →
 Read `{baseDir}/references/ai-application.md` and follow its complete flow.
+
+## Task Pool (batch / async)
+
+When the user wants **several generations at once** ("批量", "跑 3 个") or wants a
+**slow workflow to run in the background** while they keep chatting →
+Read `{baseDir}/references/task-pool.md` and follow its complete flow.
 
 ## Script Usage
 

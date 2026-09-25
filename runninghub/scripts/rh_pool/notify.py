@@ -48,10 +48,20 @@ _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) \
 
 AUTOMATION_DECLARATION_KEY = "rh-pool-poll"
 AUTOMATION_NAME = "rh-pool-poll"
-AUTOMATION_EVERY = "30s"
-DEFAULT_SESSION_KEY = "agent:main:main"
 WAKE_MESSAGE = "RunningHub 任务批次已完成：所有任务都到达终态。请读取台账（pool status）并处理产物/通知。"
 LOCK_STALE_S = 600
+
+
+def default_session_key() -> str:
+    """Wake-back target when a task carries no originating session."""
+    from rh_pool.config import load_config
+    return load_config().sessionKey
+
+
+def poll_every() -> str:
+    """Polling cadence for the automation, from config."""
+    from rh_pool.config import load_config
+    return f"{load_config().pollIntervalSeconds}s"
 
 
 # --------------------------------------------------------------------- paths
@@ -137,7 +147,7 @@ def ensure_polling_automation() -> dict:
         "automations", "add",
         "--name", AUTOMATION_NAME,
         "--description", "RunningHub pool poll (async short-lived worker)",
-        "--every", AUTOMATION_EVERY,
+        "--every", poll_every(),
         "--command-argv", json.dumps(argv),
         "--command-cwd", str(POOL_DIR),
         # The worker wakes sessions itself; the scheduler must not try to
@@ -286,7 +296,7 @@ def mode_run() -> int:
         if outstanding == 0:
             # Pool drained: wake every distinct origin session, then stop polling.
             sessions = store.distinct_session_keys()
-            targets = sessions or [DEFAULT_SESSION_KEY]
+            targets = sessions or [default_session_key()]
             for key in targets:
                 wake_session(key, WAKE_MESSAGE)
             store.clear_session_keys()

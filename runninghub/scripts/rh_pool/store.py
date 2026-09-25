@@ -334,15 +334,6 @@ class Store:
                 "UPDATE tasks SET downloads_json=?, updated_at=? WHERE id=?",
                 (json.dumps(downloads, ensure_ascii=False), now_ms(), pool_id))
 
-    def latest_session_key(self) -> str | None:
-        """Most recent originating session among all tasks (for wake-back)."""
-        with self._db() as conn:
-            row = conn.execute(
-                "SELECT session_key FROM tasks WHERE session_key IS NOT NULL "
-                "ORDER BY updated_at DESC LIMIT 1"
-            ).fetchone()
-        return row["session_key"] if row else None
-
     def distinct_session_keys(self) -> list[str]:
         """Distinct originating sessions with finished work pending wake-back."""
         with self._db() as conn:

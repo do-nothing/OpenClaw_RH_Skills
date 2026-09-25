@@ -2,11 +2,7 @@
   "schemaVersion": "rh-pool-config/1",
   "concurrency": 3,
   "defaultInstanceType": "default",
-  "notifyText": "任务批次已完成",
-  "dataDir": "data/pool",
-  "poll": {
-    "minIntervalMs": 30000,
-    "pacingMinMs": 30000,
-    "pacingMaxMs": 120000
-  }
+  "pollIntervalSeconds": 30,
+  "sessionKey": "agent:main:main",
+  "dataDir": "data/pool"
 }
