@@ -171,6 +171,21 @@ def ensure_polling_automation() -> dict:
     return {"action": "created", "jobId": job_id}
 
 
+def kick_worker() -> dict:
+    """Fire one immediate pool tick (detached, fire-and-forget).
+
+    Called right after enqueue so the batch starts within ~1s instead of
+    waiting for the scheduler's first 30s boundary. The polling automation
+    must already exist as the safety net; this only advances the first tick.
+    The worker's single-flight lock makes concurrent kicks harmless.
+    """
+    rc = mode_launch()
+    if rc == 0:
+        log("immediate worker kick issued")
+        return {"action": "issued"}
+    return {"action": "failed", "message": "mode_launch returned non-zero"}
+
+
 def remove_polling_automation() -> list[str]:
     removed: list[str] = []
     for job in find_polling_jobs():

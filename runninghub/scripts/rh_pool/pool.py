@@ -2,8 +2,8 @@
 
 Commands:
   enqueue   Add one or more workflow jobs to the global pool (PENDING).
-  tick      One non-blocking advance: dispatch within concurrency budget,
-            poll active tasks, download results.
+  tick      One non-blocking advance: dispatch -> poll states -> dispatch
+            (refill slots freed this tick) -> download outputs.
   status    Query the ledger (counts / task detail).
   reconcile Re-poll all DISPATCHED tasks and sync state (after restart).
 
@@ -196,13 +196,21 @@ def cmd_enqueue(args) -> int:
     # Ensure the single global polling automation exists so this batch will be
     # reported when it drains. Best-effort: never fail an enqueue over it.
     notify_result = {"action": "skipped"}
+    kick_result = {"action": "skipped"}
     if not getattr(args, "no_notify", False):
         try:
             notify_result = notify.ensure_polling_automation()
         except Exception as exc:  # noqa: BLE001
             notify_result = {"action": "error", "message": str(exc)}
+        # Safety net (automation) is in place -> fire one immediate tick so the
+        # batch starts now instead of waiting for the first 30s boundary.
+        if notify_result.get("action") in ("created", "reuse"):
+            try:
+                kick_result = notify.kick_worker()
+            except Exception as exc:  # noqa: BLE001
+                kick_result = {"action": "failed", "message": str(exc)}
     print(json.dumps({"enqueued": len(ids), "poolIds": ids,
-                      "notify": notify_result,
+                      "notify": notify_result, "kick": kick_result,
                       "counts": store.count_status()}, ensure_ascii=False, indent=2))
     return 0
 
@@ -267,9 +275,17 @@ def _download_outputs(store: Store, row, results: list[dict], cfg) -> list[dict]
     return downloads
 
 
-def _poll_active(store: Store, api_key: str, cfg=None) -> dict:
-    summary = {"succeeded": 0, "failed": 0, "pending": 0, "poll_errors": 0,
-               "downloaded": 0, "download_errors": 0}
+def _poll_active(store: Store, api_key: str) -> tuple[dict, list[tuple]]:
+    """Poll every DISPATCHED task once and advance state only — no downloads.
+
+    Downloading is deliberately deferred (see run_tick): a slow download must
+    not delay refilling the concurrency slot the completed task just freed.
+
+    Returns (summary, succeeded), where succeeded is a list of
+    (row, results) pairs awaiting download.
+    """
+    summary = {"succeeded": 0, "failed": 0, "pending": 0, "poll_errors": 0}
+    succeeded: list[tuple] = []
     for row in store.get_active():
         result = query_task(api_key, row["rh_task_id"])
         if not result.get("ok"):
@@ -289,12 +305,8 @@ def _poll_active(store: Store, api_key: str, cfg=None) -> dict:
                 cost_time_s=result.get("cost_time_s"),
             )
             summary["succeeded"] += 1
-            # Auto-download results (best effort; failure does not void success).
-            if cfg is not None and result.get("results"):
-                downloads = _download_outputs(store, row, result["results"], cfg)
-                store.set_downloads(row["id"], downloads)
-                summary["downloaded"] += sum(1 for d in downloads if d.get("ok"))
-                summary["download_errors"] += sum(1 for d in downloads if not d.get("ok"))
+            if result.get("results"):
+                succeeded.append((row, result["results"]))
         else:
             store.apply_query_result(
                 row["id"], "FAILED", error_code=result.get("error_code", ""),
@@ -302,17 +314,47 @@ def _poll_active(store: Store, api_key: str, cfg=None) -> dict:
                 error_message=result.get("error_message", ""),
             )
             summary["failed"] += 1
-    return summary
+    return summary, succeeded
+
+
+def _download_succeeded(store: Store, succeeded: list[tuple], cfg) -> dict:
+    """Download outputs for tasks that reached SUCCESS this tick.
+
+    Best effort: a download failure is recorded on the task but never voids
+    its SUCCESS state. Runs after the refill dispatch so replacement jobs can
+    already be queued/running on RunningHub while large files download locally.
+    """
+    stats = {"downloaded": 0, "download_errors": 0}
+    for row, results in succeeded:
+        downloads = _download_outputs(store, row, results, cfg)
+        store.set_downloads(row["id"], downloads)
+        stats["downloaded"] += sum(1 for d in downloads if d.get("ok"))
+        stats["download_errors"] += sum(1 for d in downloads if not d.get("ok"))
+    return stats
 
 
 # tick single-flight lock lives in notify.py (file-based, worker-scoped).
 
 
 def run_tick(cfg, api_key: str) -> dict:
-    """One non-blocking advance of the pool. Returns a JSON-able summary."""
+    """One non-blocking advance of the pool. Returns a JSON-able summary.
+
+    Four phases, ordered so a freed concurrency slot is refilled within the
+    same tick — before any (potentially slow) output download:
+      1. dispatch   fill slots already free at tick start
+      2. poll       advance states of in-flight tasks (no downloads)
+      3. dispatch   refill slots just freed by phase-2 completions
+      4. download   fetch outputs; replacement jobs already run on RH meanwhile
+    """
     store = Store(cfg.db_path)
-    dispatch = _dispatch_pending(store, api_key, cfg.concurrency)
-    poll = _poll_active(store, api_key, cfg)
+    dispatch1 = _dispatch_pending(store, api_key, cfg.concurrency)
+    poll, succeeded = _poll_active(store, api_key)
+    dispatch2 = _dispatch_pending(store, api_key, cfg.concurrency)
+    poll.update(_download_succeeded(store, succeeded, cfg))
+    dispatch = {
+        "dispatched": dispatch1["dispatched"] + dispatch2["dispatched"],
+        "submit_failed": dispatch1["submit_failed"] + dispatch2["submit_failed"],
+    }
     return {
         "dispatched": dispatch,
         "polled": poll,
@@ -332,14 +374,18 @@ def cmd_tick(args) -> int:
 
 
 def cmd_reconcile(args) -> int:
-    """Force a full poll sync of every DISPATCHED task (post-restart)."""
+    """Force a full poll sync of every DISPATCHED task (post-restart).
+
+    State sync + downloads only — it never dispatches PENDING jobs.
+    """
     cfg = load_config()
     store = Store(cfg.db_path)
     api_key = resolve_api_key(args.api_key)
     if not api_key:
         print(json.dumps({"error": "NO_API_KEY"}))
         return 2
-    poll = _poll_active(store, api_key, cfg)
+    poll, succeeded = _poll_active(store, api_key)
+    poll.update(_download_succeeded(store, succeeded, cfg))
     print(json.dumps({"reconciled": poll, "counts": store.count_status()},
                      ensure_ascii=False, indent=2))
     return 0
