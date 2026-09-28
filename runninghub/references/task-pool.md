@@ -151,8 +151,11 @@ the task's `downloads_json`.
 |-----|---------|
 | `concurrency` | Max jobs in flight at once (default 3) |
 | `pollIntervalSeconds` | Polling cadence — automation tick (Mode A) / watcher tick (Mode B), default 30 |
-| `sessionKey` | Mode A fallback only; normally `--openclawSessionKey` is always supplied |
 | `dataDir` | Ledger + outputs location |
+
+The Mode A wake target is not configured: it comes from `--openclawSessionKey`
+on every enqueue. A hardcoded fallback (`agent:main:main`) exists in code for
+the edge case of draining tasks that somehow recorded no session.
 
 ## Requirements
 

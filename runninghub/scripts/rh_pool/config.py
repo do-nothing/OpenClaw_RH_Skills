@@ -29,7 +29,6 @@ class PoolConfig:
     outputDir: Path | None = None              # defaults to <dataDir>/output
     defaultInstanceType: str = "default"
     pollIntervalSeconds: int = 30              # polling automation cadence
-    sessionKey: str = "agent:main:main"        # default wake-back target
 
     @property
     def db_path(self) -> Path:
@@ -62,8 +61,6 @@ def load_config() -> PoolConfig:
         cfg.defaultInstanceType = str(raw["defaultInstanceType"])
     if "pollIntervalSeconds" in raw:
         cfg.pollIntervalSeconds = max(5, int(raw["pollIntervalSeconds"]))
-    if "sessionKey" in raw:
-        cfg.sessionKey = str(raw["sessionKey"])
     # Explicit env override for data dir is handy in dev / tests.
     data_dir = os.environ.get("RH_POOL_DATA_DIR") or raw.get("dataDir")
     if data_dir:

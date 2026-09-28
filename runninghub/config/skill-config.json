@@ -3,6 +3,5 @@
   "concurrency": 1,
   "defaultInstanceType": "default",
   "pollIntervalSeconds": 30,
-  "sessionKey": "agent:main:main",
   "dataDir": "data/pool"
 }

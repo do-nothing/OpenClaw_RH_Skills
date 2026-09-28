@@ -52,11 +52,15 @@ AUTOMATION_NAME = "rh-pool-poll"
 WAKE_MESSAGE = "RunningHub 任务批次已完成：所有任务都到达终态。请读取台账（pool status）并处理产物/通知。"
 LOCK_STALE_S = 600
 
+# Wake-back fallback only. Normal Mode A batches always carry the explicit
+# --openclawSessionKey; this is used solely when draining a pool whose tasks
+# somehow recorded no session (e.g. queued via --manual before an automation run).
+DEFAULT_SESSION_KEY = "agent:main:main"
+
 
 def default_session_key() -> str:
-    """Wake-back target when a task carries no originating session."""
-    from rh_pool.config import load_config
-    return load_config().sessionKey
+    """Hardcoded fallback wake-back target (not configurable)."""
+    return DEFAULT_SESSION_KEY
 
 
 def poll_every() -> str:

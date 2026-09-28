@@ -1,8 +1,8 @@
 """Workflow task-type definitions: loading, lookup, and validation.
 
-Loads the unified config/task-types.json (real) or .example, exposes task
-types by id, and validates each type's parameter mapping against the raw
-workflow export archived at config/workflows/<workflowId>.json.
+Loads config/task-types.json (shipped with the skill), exposes task types by
+id, and validates each type's parameter mapping against the raw workflow
+export archived at config/workflows/<workflowId>.json.
 
 A task-type describes the *callable contract* (a small whitelist of input
 params); the raw export is the *graph truth source* used to verify that every
@@ -106,12 +106,12 @@ class TaskType:
 
 # --------------------------------------------------------------------- loading
 def _candidate_paths() -> list[Path]:
-    env = CONFIG_DIR  # symmetry with config.py; explicit env override:
+    # Explicit env override is handy in dev / tests.
     import os
     override = os.environ.get("RH_TASK_TYPES")
     if override:
         return [Path(override)]
-    return [CONFIG_DIR / "task-types.json", CONFIG_DIR / "task-types.json.example"]
+    return [CONFIG_DIR / "task-types.json"]
 
 
 def load_task_types(path: Path | None = None) -> list[TaskType]:
@@ -124,7 +124,7 @@ def load_task_types(path: Path | None = None) -> list[TaskType]:
             break
     if raw is None:
         raise DefinitionError(
-            "no task-types config found (config/task-types.json or .example)"
+            "no task-types config found (config/task-types.json)"
         )
     if raw.get("schemaVersion") != SCHEMA_VERSION:
         raise DefinitionError(
