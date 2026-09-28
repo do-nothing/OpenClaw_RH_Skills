@@ -2,8 +2,15 @@
 
 For **batch submission** or **long-running workflows**, use the task pool instead of
 blocking on a single script call. It submits many jobs, runs them within a
-concurrency budget, and downloads results. A background `watch` process exits
-when the batch drains; its completion notification returns to this conversation.
+concurrency budget, and downloads results.
+
+The pool code is host-agnostic. **The enqueue flag selects the runner — you do
+not choose a mode in prose:**
+
+| Host | enqueue flag | Runner | Completion |
+|------|--------------|--------|------------|
+| **openclaw** | `--openclawSessionKey <session>` | polling automation (zero LLM) + immediate first tick | session is **woken by CLI** when the batch drains |
+| **any other host** (Trae, DeepSeek harness, unknown shells) | *(no flag)* | detached background **watcher**, auto-started by enqueue | process exits at drain; **no wake-up** — reconcile when the user returns |
 
 Script: `python3 {baseDir}/scripts/rh_pool/pool.py`
 
@@ -34,17 +41,20 @@ python3 {baseDir}/scripts/rh_pool/pool.py workflow validate
 A type's file params accept **a local path** (uploaded automatically, cached),
 an `api/...` id, or a URL.
 
-## Submit
+## Submit — Mode A: openclaw
 
-Always pass `--no-notify` in Trae (no external scheduler/session-wake CLI):
+Take the session key verbatim from the **`session=` field of your runtime
+context** and pass it as a plaintext flag (there is no environment variable):
 
 ```bash
 # one type
-python3 {baseDir}/scripts/rh_pool/pool.py enqueue --no-notify \
+python3 {baseDir}/scripts/rh_pool/pool.py enqueue \
+  --openclawSessionKey "agent:main:xxxx" \
   --type music-minimax --param prompt="lo-fi chill beats, soft piano"
 
 # a batch from a file (list of jobs)
-python3 {baseDir}/scripts/rh_pool/pool.py enqueue --no-notify --from-file jobs.json
+python3 {baseDir}/scripts/rh_pool/pool.py enqueue \
+  --openclawSessionKey "agent:main:xxxx" --from-file jobs.json
 ```
 
 `jobs.json`:
@@ -56,55 +66,96 @@ python3 {baseDir}/scripts/rh_pool/pool.py enqueue --no-notify --from-file jobs.j
 ]
 ```
 
-`enqueue` returns `poolIds`. Then immediately launch the watcher **as a
-background task** (Shell `run_in_background`; do NOT run it foreground, and do
-NOT poll/sleep yourself):
+What enqueue does for you: creates (or reuses) one global polling automation,
+then fires one immediate tick so the batch starts within ~1s instead of waiting
+for the first 30s boundary. The JSON response contains `"mode": "openclaw"`,
+`"automation"` and `"kick"`.
+
+- **Your turn ends after submit.** Tell the user work started, then stop — do
+  NOT poll `status`, sleep, or wait in-loop.
+- When the batch drains, the automation wakes exactly the session whose key
+  you passed, then removes itself (one wake-up per batch). When you are woken:
+  run `pool.py status`, then deliver files with the **`message` tool** exactly
+  as in `references/output-delivery.md`.
+- **Errors are reported, never auto-degraded.** If the response shows
+  `automation.action == "error"` or `kick.action == "failed"` (the command
+  exits non-zero), tell the user what went wrong verbatim — do NOT retry as
+  Mode B or start a watcher yourself. The jobs are still safely queued.
+
+## Submit — Mode B: generic hosts (no openclaw)
+
+Enqueue with **no mode flag** — the detached watcher is started automatically,
+so there is no second command to run:
 
 ```bash
-python3 {baseDir}/scripts/rh_pool/pool.py watch
+# one type
+python3 {baseDir}/scripts/rh_pool/pool.py enqueue \
+  --type image-gen-qwen --param prompt="江南水乡，水彩风格"
+
+# a batch from a file (list of jobs)
+python3 {baseDir}/scripts/rh_pool/pool.py enqueue --from-file jobs.json
 ```
 
-It ticks once immediately, then every `pollIntervalSeconds`, until the pool
-reaches zero outstanding jobs and exits. Process exit is the completion signal:
-the agent host posts the background-task notification into THIS conversation.
-After launching it, tell the user work has started and end your turn — never
-poll or sleep yourself. When the notification arrives, run `status` and deliver
-the files (see below). No session key is involved.
+The JSON response contains `"mode": "watch"` and `"watcher": {"action":
+"issued"}`. The watcher ticks immediately, then every `pollIntervalSeconds`,
+until zero outstanding jobs and exits (exit code 0 on a clean drain). If the
+watcher fails to start (`"action": "failed"`, non-zero exit), report the error
+to the user verbatim — do not improvise another polling scheme.
+
+**Empirical limitation — do NOT promise auto wake-up.** On non-openclaw hosts
+the watcher's process-exit event does NOT start a new agent turn for
+minute-scale jobs; it is injected into the conversation only along with the
+user's next message. Therefore:
+
+1. After enqueue, tell the user honestly, e.g. "开始生成啦，完成后你回来发任意
+   一句话，我立刻查收并交付～", then end your turn. Never poll or sleep yourself.
+2. Whenever the user returns (a completion event may be attached to their
+   message), your **first** action is `pool.py status`.
+3. If the host/IDE was restarted while jobs were in flight, first run
+   `pool.py reconcile` (resync states + download finished outputs); if anything
+   is still outstanding, restart a watcher in the background with
+   `python3 {baseDir}/scripts/rh_pool/notify.py watch`.
+4. Deliver outputs as **clickable absolute file links** (there is no `message`
+   tool on generic hosts). Never paste RunningHub internal URLs.
+
+## Manual enqueue (testing / debugging)
+
+`--manual` queues jobs and starts **nothing** — no automation, no watcher:
+
+```bash
+python3 {baseDir}/scripts/rh_pool/pool.py enqueue --manual --type image-gen-qwen --param prompt="..."
+```
+
+Advance the pool yourself with `pool.py tick` (one step). Never use `--manual`
+in normal user-facing operation.
 
 ## Check progress
 
 ```bash
 python3 {baseDir}/scripts/rh_pool/pool.py status              # counts + recent tasks
 python3 {baseDir}/scripts/rh_pool/pool.py status --pool-id 7  # one task, incl. downloads
+python3 {baseDir}/scripts/rh_pool/pool.py reconcile           # resync + download after a restart (no dispatch)
 ```
 
 Statuses: `PENDING` → `DISPATCHED` → `SUCCESS` / `FAILED` / `SUBMIT_FAILED`.
 `outstanding` is how much is still running.
 
 Downloaded files land under `data/pool/output/<poolId>/...`; their paths are in
-the task's `downloads_json`. **Deliver them as clickable absolute file links**
-(the `message` tool does not exist in Trae).
+the task's `downloads_json`.
 
-## Background watcher
+## Configuration
 
-The watcher (`pool.py watch`, one per pool) runs ticks with zero LLM cost and
-exits when the batch drains — its process-exit notification is the only
-completion signal. You do not poll by hand.
-
-Recovery: a background watcher is bound to this IDE session; if the IDE was
-closed while jobs were in flight, run `pool.py reconcile` once in the next
-session to resync states and download finished outputs, then start `watch`
-again if anything is still outstanding.
-
-Tune it in `config/skill-config.json` (shipped with the skill):
+`config/skill-config.json` (shipped with the skill):
 
 | Key | Meaning |
 |-----|---------|
 | `concurrency` | Max jobs in flight at once (default 3) |
-| `pollIntervalSeconds` | Watcher poll cadence (default 30) |
+| `pollIntervalSeconds` | Polling cadence — automation tick (Mode A) / watcher tick (Mode B), default 30 |
+| `sessionKey` | Mode A fallback only; normally `--openclawSessionKey` is always supplied |
 | `dataDir` | Ledger + outputs location |
 
 ## Requirements
 
-`python3` and `curl` on `PATH`. No `openclaw` CLI or scheduler is needed in the
-Trae flow (`--no-notify` on every enqueue; `notify.py` stays unused).
+- Both modes: `python3` and `curl` on `PATH`.
+- Mode A additionally needs the `openclaw` CLI on `PATH` (or `OPENCLAW_BIN`).
+- Mode B needs nothing else.

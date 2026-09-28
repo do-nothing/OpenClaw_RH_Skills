@@ -1,14 +1,15 @@
-"""Drain notification for the RunningHub task pool.
+"""Runners for the RunningHub task pool — two host modes.
 
-A single global polling automation (every 30s, command payload, zero LLM)
-asynchronously launches a short-lived worker and returns immediately. The
-worker advances the pool one step; when the pool has drained it wakes the
-originating session via the CLI and then removes the automation -- whether or
-not the wake succeeded.
+Mode A (openclaw): a single global polling automation (every 30s, command
+payload, zero LLM) launches a short-lived `run` worker. The worker advances
+the pool one step; on drain it wakes the originating session via the CLI and
+removes the automation -- whether or not the wake succeeded. Dedup anchor:
+the automation's existence means "still polling"; a batch notifies exactly
+once.
 
-Dedup anchor: the automation's existence means "still polling". Once the wake
-command has been issued the automation is removed, so a batch notifies exactly
-once and no latch/flag is needed anywhere.
+Mode B (generic hosts): `enqueue` (without --openclawSessionKey) spawns a
+detached `watch` worker that loops ticks until the pool drains, then exits.
+No scheduler, no session wake -- process exit is the only signal.
 """
 
 from __future__ import annotations
@@ -186,6 +187,23 @@ def kick_worker() -> dict:
     return {"action": "failed", "message": "mode_launch returned non-zero"}
 
 
+def kick_watch() -> dict:
+    """Mode B: spawn the detached loop-until-drain watcher.
+
+    Used by `pool.py enqueue` on generic (non-openclaw) hosts: no scheduler
+    and no session wake — the watcher process simply runs the pool until the
+    batch drains, then exits. The single-flight lock makes a second enqueue
+    during a running batch harmless.
+    """
+    try:
+        _detached_popen([_python_exe(), str(NOTIFY_SCRIPT), "watch"])
+    except Exception as exc:  # noqa: BLE001
+        log(f"watch spawn FAILED: {exc}")
+        return {"action": "failed", "message": str(exc)}
+    log("background watcher issued")
+    return {"action": "issued"}
+
+
 def remove_polling_automation() -> list[str]:
     removed: list[str] = []
     for job in find_polling_jobs():
@@ -264,9 +282,8 @@ def _release_lock() -> None:
 
 
 # ---------------------------------------------------------------------- modes
-def mode_launch() -> int:
-    """Fire-and-forget: spawn the worker detached, return immediately."""
-    argv = [_python_exe(), str(NOTIFY_SCRIPT), "run"]
+def _detached_popen(argv: list[str]) -> None:
+    """Spawn argv fully detached (no console, survives the launcher's exit)."""
     kwargs: dict = {"cwd": str(POOL_DIR),
                     "stdin": subprocess.DEVNULL,
                     "stdout": subprocess.DEVNULL,
@@ -274,13 +291,18 @@ def mode_launch() -> int:
                     "close_fds": True}
     if os.name == "nt":
         # Detached + no console window, so neither the launcher's exit kills the
-        # worker nor a black console flashes on every tick.
+        # child nor a black console flashes on every tick.
         kwargs["creationflags"] = (_NO_WINDOW | subprocess.DETACHED_PROCESS
                                    | subprocess.CREATE_NEW_PROCESS_GROUP)
     else:
         kwargs["start_new_session"] = True
+    subprocess.Popen(argv, **kwargs)
+
+
+def mode_launch() -> int:
+    """Fire-and-forget: spawn the one-shot worker detached, return immediately."""
     try:
-        subprocess.Popen(argv, **kwargs)
+        _detached_popen([_python_exe(), str(NOTIFY_SCRIPT), "run"])
     except Exception as exc:  # noqa: BLE001
         log(f"launch FAILED: {exc}")
         return 1
@@ -325,6 +347,56 @@ def mode_run() -> int:
         _release_lock()
 
 
+def mode_watch() -> int:
+    """Generic-host watcher: loop ticks until the pool drains, then exit.
+
+    Unlike mode_run there is no scheduler, no wake, and no automation to
+    remove: process exit is the only completion signal. The first tick runs
+    immediately; transient per-tick errors are logged and never kill the
+    watcher. The lock file's mtime is refreshed every tick so a long-lived
+    watcher is never treated as a stale lock, while a crashed one is still
+    reclaimed after LOCK_STALE_S.
+    """
+    if not _acquire_lock():
+        log("watch: lock busy, another worker is active; exiting")
+        return 0
+    try:
+        from rh_pool import pool as pool_mod
+        from rh_pool.config import load_config
+        from runninghub import resolve_api_key
+
+        cfg = load_config()
+        api_key = resolve_api_key(None)
+        if not api_key:
+            log("watch: NO_API_KEY")
+            return 2
+        interval = max(5, cfg.pollIntervalSeconds)
+        log(f"watch started (interval={interval}s)")
+        while True:
+            try:
+                summary = pool_mod.run_tick(cfg, api_key)
+            except Exception as exc:  # noqa: BLE001 — keep watching through hiccups
+                log(f"watch tick ERROR {type(exc).__name__}: {exc}")
+            else:
+                counts = summary.get("counts") or {}
+                outstanding = counts.get("outstanding", 1)
+                log(f"watch tick outstanding={outstanding} counts={counts}")
+                if outstanding == 0:
+                    log("watch drained; exiting")
+                    return 0
+            # Prove liveness: refresh the lock mtime before sleeping.
+            try:
+                os.utime(_lock_path(), None)
+            except OSError:
+                pass
+            time.sleep(interval)
+    except Exception as exc:  # noqa: BLE001
+        log(f"watch FATAL {type(exc).__name__}: {exc}")
+        return 1
+    finally:
+        _release_lock()
+
+
 def main(argv: list[str] | None = None) -> int:
     # Under pythonw the standard streams may be absent; never let a print crash.
     if sys.stdout is None:
@@ -335,6 +407,8 @@ def main(argv: list[str] | None = None) -> int:
     mode = argv[0] if argv else "run"
     if mode == "launch":
         return mode_launch()
+    if mode == "watch":
+        return mode_watch()
     if mode == "ensure":
         print(json.dumps(ensure_polling_automation(), ensure_ascii=False, indent=2))
         return 0

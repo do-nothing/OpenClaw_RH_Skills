@@ -2,25 +2,28 @@
 
 Commands:
   enqueue   Add one or more workflow jobs to the global pool (PENDING).
+            Mode is selected by flag, not by the caller's prose:
+              --openclawSessionKey <key>  Mode A: openclaw polling automation
+                                          + session wake on drain.
+              (no flag)                   Mode B: detached background watcher
+                                          that exits when the pool drains.
+              --manual                    Enqueue only; nothing is started.
   tick      One non-blocking advance: dispatch -> poll states -> dispatch
             (refill slots freed this tick) -> download outputs.
   status    Query the ledger (counts / task detail).
   reconcile Re-poll all DISPATCHED tasks and sync state (after restart).
 
 The pool is a pure executor + ledger: it answers "accept work" and "is it
-done". Waiting and notification belong to the caller. Two runners drive it:
-OpenClaw uses scheduled workers that wake the originating session
-(rh_pool/notify.py); Trae uses `watch`, which loops ticks in a background
-task whose process exit carries the completion notification.
+done". Both runners live in rh_pool/notify.py: Mode A is the scheduler-driven
+short-lived worker (automation + session wake), Mode B is the detached
+`notify.py watch` loop (process exit is the only completion signal).
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
-import time
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -212,36 +215,49 @@ def cmd_enqueue(args) -> int:
                          ensure_ascii=False), file=sys.stderr)
         return 2
 
-    ids = store.enqueue(resolved, session_key=_current_session_key())
-    # Ensure the single global polling automation exists so this batch will be
-    # reported when it drains. Best-effort: never fail an enqueue over it.
-    notify_result = {"action": "skipped"}
-    kick_result = {"action": "skipped"}
-    if not getattr(args, "no_notify", False):
+    # Mode selection is purely flag-driven (see module docstring). The openclaw
+    # session key is an explicit plaintext argument, never an environment var.
+    ids = store.enqueue(resolved, session_key=args.openclaw_session_key)
+
+    runner_failed = False
+    if args.manual:
+        runner = {"mode": "manual",
+                  "automation": {"action": "skipped"},
+                  "watcher": {"action": "skipped"}}
+    elif args.openclaw_session_key:
+        # Mode A — openclaw: ensure the single global polling automation (the
+        # 30s safety net), then fire one immediate tick. Errors are reported,
+        # never silently degraded to Mode B.
+        automation = {"action": "skipped"}
+        kick = {"action": "skipped"}
         try:
-            notify_result = notify.ensure_polling_automation()
+            automation = notify.ensure_polling_automation()
         except Exception as exc:  # noqa: BLE001
-            notify_result = {"action": "error", "message": str(exc)}
-        # Safety net (automation) is in place -> fire one immediate tick so the
-        # batch starts now instead of waiting for the first 30s boundary.
-        if notify_result.get("action") in ("created", "reuse"):
+            automation = {"action": "error", "message": str(exc)}
+        if automation.get("action") in ("created", "reuse"):
             try:
-                kick_result = notify.kick_worker()
+                kick = notify.kick_worker()
             except Exception as exc:  # noqa: BLE001
-                kick_result = {"action": "failed", "message": str(exc)}
-    print(json.dumps({"enqueued": len(ids), "poolIds": ids,
-                      "notify": notify_result, "kick": kick_result,
+                kick = {"action": "failed", "message": str(exc)}
+        runner = {"mode": "openclaw", "automation": automation, "kick": kick}
+        runner_failed = (automation.get("action") == "error"
+                         or kick.get("action") == "failed")
+    else:
+        # Mode B — generic host: detached in-process watcher loops ticks until
+        # the pool drains. No scheduler or session wake exists here.
+        try:
+            watcher = notify.kick_watch()
+        except Exception as exc:  # noqa: BLE001
+            watcher = {"action": "failed", "message": str(exc)}
+        runner = {"mode": "watch", "watcher": watcher}
+        runner_failed = watcher.get("action") == "failed"
+
+    print(json.dumps({"enqueued": len(ids), "poolIds": ids, **runner,
                       "counts": store.count_status()}, ensure_ascii=False, indent=2))
-    return 0
-
-
-def _current_session_key() -> str:
-    """Originating session for wake-back.
-
-    The caller (skill/session) may pass OPENCLAW_SESSION_KEY; otherwise use the
-    configured default (config.sessionKey).
-    """
-    return os.environ.get("OPENCLAW_SESSION_KEY") or notify.default_session_key()
+    # Jobs are safely in the ledger regardless, but a runner setup failure must
+    # be visible: non-zero exit so the caller reports it instead of assuming
+    # the batch will be picked up.
+    return 1 if runner_failed else 0
 
 
 def _dispatch_pending(store: Store, api_key: str, concurrency: int) -> dict:
@@ -393,38 +409,6 @@ def cmd_tick(args) -> int:
     return 0
 
 
-def cmd_watch(args) -> int:
-    """Loop ticks in-process until the pool drains, then exit.
-
-    Trae entry point: launch as a background task right after
-    `enqueue --no-notify`. Process exit is the completion signal — the agent
-    host injects a background-task notification back into the originating
-    conversation, so no scheduler, session key, or external CLI is involved.
-    The first tick runs immediately (no startup wait); transient per-tick
-    errors are logged but never kill the watcher.
-    """
-    cfg = load_config()
-    api_key = resolve_api_key(args.api_key)
-    if not api_key:
-        print(json.dumps({"error": "NO_API_KEY"}))
-        return 2
-    interval = max(5, args.interval or cfg.pollIntervalSeconds)
-    while True:
-        try:
-            summary = run_tick(cfg, api_key)
-        except Exception as exc:  # noqa: BLE001 — keep watching through hiccups
-            print(json.dumps({"event": "tick_error", "message": str(exc)},
-                             ensure_ascii=False), flush=True)
-        else:
-            print(json.dumps({"event": "tick", **summary},
-                             ensure_ascii=False), flush=True)
-            if summary["counts"].get("outstanding", 0) == 0:
-                print(json.dumps({"event": "drained", **summary},
-                                 ensure_ascii=False), flush=True)
-                return 0
-        time.sleep(interval)
-
-
 def cmd_reconcile(args) -> int:
     """Force a full poll sync of every DISPATCHED task (post-restart).
 
@@ -514,17 +498,18 @@ def build_parser() -> argparse.ArgumentParser:
     pe.add_argument("--node", action="append", help="nodeId:fieldName=value")
     pe.add_argument("--instance-type", choices=["default", "plus", "ultra"])
     pe.add_argument("--from-file", help="JSON file: job or list of jobs")
-    pe.add_argument("--no-notify", action="store_true",
-                    help="Do not create the polling automation")
+    pe.add_argument("--openclawSessionKey", dest="openclaw_session_key",
+                    metavar="SESSION_KEY",
+                    help="Mode A: openclaw session to wake on drain (take the "
+                         "session= value from your runtime context). Without "
+                         "this flag enqueue auto-starts the generic background "
+                         "watcher (Mode B).")
+    pe.add_argument("--manual", action="store_true",
+                    help="Enqueue only: create neither automation nor watcher "
+                         "(debug/testing).")
 
     pt = sub.add_parser("tick", help="One non-blocking advance")
     pt.add_argument("--api-key", "-k")
-
-    pwt = sub.add_parser("watch",
-                         help="Loop ticks in a background task until the pool drains")
-    pwt.add_argument("--api-key", "-k")
-    pwt.add_argument("--interval", type=int,
-                     help="poll cadence seconds (default: pollIntervalSeconds)")
 
     pr = sub.add_parser("reconcile", help="Resync active tasks with RH")
     pr.add_argument("--api-key", "-k")
@@ -547,7 +532,6 @@ def main(argv: list[str] | None = None) -> int:
     return {
         "enqueue": cmd_enqueue,
         "tick": cmd_tick,
-        "watch": cmd_watch,
         "reconcile": cmd_reconcile,
         "workflow": cmd_workflow,
         "status": cmd_status,
