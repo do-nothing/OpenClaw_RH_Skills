@@ -2,43 +2,6 @@
   "schemaVersion": "rh-task-types/1",
   "types": [
     {
-      "typeId": "voice-clone",
-      "version": 1,
-      "displayName": "语音克隆 v1",
-      "description": "IndexTTS2：用一段参考音频克隆音色并合成语音。",
-      "workflowId": "1991003046928916481",
-      "instanceType": "default",
-      "params": [
-        {
-          "name": "text",
-          "label": "语音文字",
-          "type": "text",
-          "required": true,
-          "nodeId": "4",
-          "fieldName": "text"
-        },
-        {
-          "name": "referenceAudio",
-          "label": "参考声音",
-          "type": "audio",
-          "required": true,
-          "nodeId": "17",
-          "fieldName": "audio",
-          "accept": [".mp3", ".wav", ".m4a", ".m3a"]
-        },
-        {
-          "name": "emoText",
-          "label": "情绪描述文本",
-          "type": "text",
-          "required": false,
-          "default": "",
-          "nodeId": "1",
-          "fieldName": "emo_text"
-        }
-      ],
-      "fixedOverrides": []
-    },
-    {
       "typeId": "voice-clone-emo",
       "version": 1,
       "displayName": "IndexTTS2 音色克隆（带语气）",
@@ -107,25 +70,6 @@
           "type": "text",
           "required": true,
           "nodeId": "205",
-          "fieldName": "text"
-        }
-      ],
-      "fixedOverrides": []
-    },
-    {
-      "typeId": "image-gen",
-      "version": 1,
-      "displayName": "文生图（公共案例）",
-      "description": "公共 ComfyUI 文生图工作流。",
-      "workflowId": "1904136902449209346",
-      "instanceType": "default",
-      "params": [
-        {
-          "name": "prompt",
-          "label": "画面描述",
-          "type": "text",
-          "required": true,
-          "nodeId": "6",
           "fieldName": "text"
         }
       ],
@@ -284,6 +228,188 @@
           "enum": ["auto", "1:1", "1:4", "1:8", "2:3", "3:2", "3:4", "4:1", "4:3", "4:5", "5:4", "8:1", "9:16", "16:9", "21:9"],
           "nodeId": "2",
           "fieldName": "aspectRatio"
+        }
+      ],
+      "fixedOverrides": []
+    },
+    {
+      "typeId": "image-gen-qwen",
+      "version": 1,
+      "displayName": "Qwen Image 2.1 文生图大合集",
+      "description": "Qwen Image 2.1：文字描述生成图片，内置提示词自动扩展（LTX2）。画面比例可选，默认 16:9。",
+      "workflowId": "2104415722230345730",
+      "instanceType": "default",
+      "params": [
+        {
+          "name": "prompt",
+          "label": "画面描述",
+          "type": "text",
+          "required": true,
+          "nodeId": "456",
+          "fieldName": "prompt"
+        },
+        {
+          "name": "aspectRatio",
+          "label": "画面比例",
+          "type": "enum",
+          "required": false,
+          "default": "16:9 (Widescreen)",
+          "enum": [
+            "1:1 (Square)",
+            "2:3 (Portrait Photo)",
+            "3:2 (Photo)",
+            "3:4 (Portrait Standard)",
+            "4:3 (Standard)",
+            "9:16 (Portrait Widescreen)",
+            "16:9 (Widescreen)",
+            "21:9 (Ultrawide)"
+          ],
+          "nodeId": "406",
+          "fieldName": "aspect_ratio"
+        }
+      ],
+      "fixedOverrides": []
+    },
+    {
+      "typeId": "image-edit-qwen",
+      "version": 1,
+      "displayName": "Qwen Image 2.1 单图编辑",
+      "description": "Qwen Image 2.1：1 张参考图 + 编辑指令生成图片，内置提示词自动扩展。画面比例可选，默认 16:9。",
+      "workflowId": "2104493095424454658",
+      "instanceType": "default",
+      "params": [
+        {
+          "name": "prompt",
+          "label": "编辑指令",
+          "type": "text",
+          "required": true,
+          "nodeId": "458",
+          "fieldName": "prompt"
+        },
+        {
+          "name": "image",
+          "label": "参考图片",
+          "type": "image",
+          "required": true,
+          "nodeId": "177",
+          "fieldName": "image",
+          "accept": [".jpg", ".jpeg", ".png", ".webp"]
+        },
+        {
+          "name": "aspectRatio",
+          "label": "画面比例",
+          "type": "enum",
+          "required": false,
+          "default": "16:9 (Widescreen)",
+          "enum": [
+            "1:1 (Square)",
+            "2:3 (Portrait Photo)",
+            "3:2 (Photo)",
+            "3:4 (Portrait Standard)",
+            "4:3 (Standard)",
+            "9:16 (Portrait Widescreen)",
+            "16:9 (Widescreen)",
+            "21:9 (Ultrawide)"
+          ],
+          "nodeId": "410",
+          "fieldName": "aspect_ratio"
+        }
+      ],
+      "fixedOverrides": []
+    },
+    {
+      "typeId": "image-edit-qwen-multi",
+      "version": 1,
+      "displayName": "Qwen Image 2.1 多图编辑",
+      "description": "Qwen Image 2.1：主图 + 最多 5 张参考图 + 编辑指令（如换装/换配饰/参考姿势）。未用图片槽留空即可，支持 2～6 张按需传入（空串掐断已实测）。默认 16:9。",
+      "workflowId": "2104493103100026881",
+      "instanceType": "default",
+      "params": [
+        {
+          "name": "prompt",
+          "label": "编辑指令",
+          "type": "text",
+          "required": true,
+          "nodeId": "494",
+          "fieldName": "prompt"
+        },
+        {
+          "name": "image",
+          "label": "主图（图1）",
+          "type": "image",
+          "required": true,
+          "nodeId": "420",
+          "fieldName": "image",
+          "accept": [".jpg", ".jpeg", ".png", ".webp"]
+        },
+        {
+          "name": "image2",
+          "label": "参考图片 2",
+          "type": "image",
+          "required": false,
+          "default": "",
+          "nodeId": "432",
+          "fieldName": "image",
+          "accept": [".jpg", ".jpeg", ".png", ".webp"]
+        },
+        {
+          "name": "image3",
+          "label": "参考图片 3",
+          "type": "image",
+          "required": false,
+          "default": "",
+          "nodeId": "433",
+          "fieldName": "image",
+          "accept": [".jpg", ".jpeg", ".png", ".webp"]
+        },
+        {
+          "name": "image4",
+          "label": "参考图片 4",
+          "type": "image",
+          "required": false,
+          "default": "",
+          "nodeId": "436",
+          "fieldName": "image",
+          "accept": [".jpg", ".jpeg", ".png", ".webp"]
+        },
+        {
+          "name": "image5",
+          "label": "参考图片 5",
+          "type": "image",
+          "required": false,
+          "default": "",
+          "nodeId": "435",
+          "fieldName": "image",
+          "accept": [".jpg", ".jpeg", ".png", ".webp"]
+        },
+        {
+          "name": "image6",
+          "label": "参考图片 6",
+          "type": "image",
+          "required": false,
+          "default": "",
+          "nodeId": "434",
+          "fieldName": "image",
+          "accept": [".jpg", ".jpeg", ".png", ".webp"]
+        },
+        {
+          "name": "aspectRatio",
+          "label": "画面比例",
+          "type": "enum",
+          "required": false,
+          "default": "16:9 (Widescreen)",
+          "enum": [
+            "1:1 (Square)",
+            "2:3 (Portrait Photo)",
+            "3:2 (Photo)",
+            "3:4 (Portrait Standard)",
+            "4:3 (Standard)",
+            "9:16 (Portrait Widescreen)",
+            "16:9 (Widescreen)",
+            "21:9 (Ultrawide)"
+          ],
+          "nodeId": "424",
+          "fieldName": "aspect_ratio"
         }
       ],
       "fixedOverrides": []

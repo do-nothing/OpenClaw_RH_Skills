@@ -41,7 +41,7 @@ Always pass `--no-notify` in Trae (no external scheduler/session-wake CLI):
 ```bash
 # one type
 python3 {baseDir}/scripts/rh_pool/pool.py enqueue --no-notify \
-  --type image-gen --param prompt="a cute puppy, 4K cinematic"
+  --type music-minimax --param prompt="lo-fi chill beats, soft piano"
 
 # a batch from a file (list of jobs)
 python3 {baseDir}/scripts/rh_pool/pool.py enqueue --no-notify --from-file jobs.json
@@ -50,8 +50,8 @@ python3 {baseDir}/scripts/rh_pool/pool.py enqueue --no-notify --from-file jobs.j
 `jobs.json`:
 ```json
 [
-  {"type": "image-gen", "params": {"prompt": "..."}},
-  {"type": "voice-clone", "params": {"text": "...", "referenceAudio": "/path/ref.m4a"}},
+  {"type": "music-minimax", "params": {"prompt": "..."}},
+  {"type": "voice-clone-emo", "params": {"text": "...", "referenceAudio": "/path/ref.m4a"}},
   {"type": "digital-human", "params": {"image": "/path/p.jpg", "audio": "/path/a.m4a", "text": "..."}}
 ]
 ```
