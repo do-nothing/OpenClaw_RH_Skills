@@ -56,10 +56,10 @@ an `api/...` id, or a URL.
 
 ## Output locations and names
 
-- **Default (throwaway tasks):** system temp root
-  `<tmp>/openclaw/rh-output/batch-<batchId>/<poolId>_<nodeId>_<idx>.<ext>` —
-  same root as synchronous calls, grouped per batch. Missing parent dirs are
-  created automatically.
+- **Default:** inside the skill's pool home,
+  `data/pool/output/batch-<batchId>/<poolId>_<nodeId>_<idx>.<ext>` —
+  persistent on every host (does not depend on system temp cleanup), grouped
+  per batch. Missing parent dirs are created automatically.
 - **Real projects:** give each job its own `outputDir` (no batch subdir is
   added) and optional `outputName` (basename **without extension**; the real
   extension comes from the result). Multiple results get `_0`, `_1` suffixes;
@@ -75,8 +75,8 @@ an `api/...` id, or a URL.
 ]
 ```
 
-  CLI equivalents: `--output-dir DIR` (default for every job in `--from-file`,
-  overridable per job) and `--output-name NAME` (single-job enqueue).
+CLI equivalents: `--output-dir DIR` (default for every job in `--from-file`,
+overridable per job) and `--output-name NAME` (single-job enqueue).
 
 ## Submit — Mode A: openclaw
 
@@ -112,12 +112,14 @@ for the first 30s boundary. The JSON response contains `"mode": "openclaw"`,
   NOT poll `status`, sleep, or wait in-loop.
 - When the batch drains, the automation wakes exactly the session whose key
   you passed, then removes itself (one wake-up per batch). When you are woken:
-  run `pool.py outputs --latest` for the drained batch's protocol lines
-  (`BATCH:` header with per-state counts, every `OUTPUT_FILE:`, aggregated
-  `COINS:`/`COST:`/`THIRD_PARTY:`, max `DURATION:`, one `ERROR:<poolId>: …`
-  per failure), then deliver exactly per `references/output-delivery.md` —
-  on openclaw that means the `message` tool and the cost-reporting rules
-  there. One task's detail: `status --pool-id <id> --lines`.
+  run `pool.py outputs --batch-id <batchId>` using the **batchId from the
+  enqueue response** (prefer it over `--latest` — a newer batch may already be
+  running). It prints the `BATCH:` header with per-state counts, every
+  `OUTPUT_FILE:`, aggregated `COINS:`/`COST:`/`THIRD_PARTY:`, max `DURATION:`,
+  and one `ERROR:<poolId>: …` per failure. Then deliver exactly per
+  `references/output-delivery.md` — on openclaw that means the `message` tool
+  and the cost-reporting rules there. One task's detail:
+  `status --pool-id <id> --lines`.
 - **Errors are reported, never auto-degraded.** If the response shows
   `automation.action == "error"` or `kick.action == "failed"` (the command
   exits non-zero), tell the user what went wrong verbatim — do NOT retry as
@@ -139,9 +141,11 @@ python3 {baseDir}/scripts/rh_pool/pool.py enqueue --from-file jobs.json
 
 The JSON response contains `"mode": "watch"` and `"watcher": {"action":
 "issued"}`. The watcher ticks immediately, then every `pollIntervalSeconds`,
-until zero outstanding jobs and exits (exit code 0 on a clean drain). If the
-watcher fails to start (`"action": "failed"`, non-zero exit), report the error
-to the user verbatim — do not improvise another polling scheme.
+and exits when the pool is fully drained (exit code 0). If a new batch is
+opened in the drain window, it keeps ticking instead of exiting — appended
+work is never stranded. If the watcher fails to start (`"action": "failed"`,
+non-zero exit), report the error to the user verbatim — do not improvise
+another polling scheme.
 
 **Empirical limitation — do NOT promise auto wake-up.** On non-openclaw hosts
 the watcher's process-exit event does NOT start a new agent turn for
@@ -151,12 +155,16 @@ user's next message. Therefore:
 1. After enqueue, tell the user honestly, e.g. "开始生成啦，完成后你回来发任意
    一句话，我立刻查收并交付～", then end your turn. Never poll or sleep yourself.
 2. Whenever the user returns (a completion event may be attached to their
-   message), your **first** action is `pool.py status`.
-3. Run `pool.py outputs --latest` and deliver the `OUTPUT_FILE:` paths as
-   **clickable absolute file links** (generic-host column of
-   `references/output-delivery.md`), reporting the aggregated non-zero
-   `COINS:` / `COST:` / `THIRD_PARTY:` lines per the cost rules. Never paste
-   RunningHub internal URLs. One task's detail: `status --pool-id <id> --lines`.
+   message), your **first** action is `pool.py status`. Deliver only when
+   `currentBatchId` is null (drained); if jobs remain, report progress and
+   end the turn.
+3. Once drained, run `pool.py outputs --batch-id <batchId>` (the batchId from
+   the enqueue response; use `--latest` only if you do not have it) and
+   deliver the `OUTPUT_FILE:` paths as **clickable absolute file links**
+   (generic-host column of `references/output-delivery.md`), reporting the
+   aggregated non-zero `COINS:` / `COST:` / `THIRD_PARTY:` lines per the cost
+   rules. Never paste RunningHub internal URLs. One task's detail:
+   `status --pool-id <id> --lines`.
 4. If the host/IDE was restarted while jobs were in flight, first run
    `pool.py reconcile` (resync states + download finished outputs); if anything
    is still outstanding, restart a watcher in the background with
@@ -176,26 +184,30 @@ in normal user-facing operation.
 ## Check progress
 
 ```bash
-python3 {baseDir}/scripts/rh_pool/pool.py status              # counts + recent tasks
-python3 {baseDir}/scripts/rh_pool/pool.py status --pool-id 7  # one task, incl. downloads
+python3 {baseDir}/scripts/rh_pool/pool.py status              # currentBatchId + counts + recent tasks
+python3 {baseDir}/scripts/rh_pool/pool.py status --pool-id 7  # one task, incl. rh_status/downloads
+python3 {baseDir}/scripts/rh_pool/pool.py outputs --latest    # one batch: all files + aggregated fees
 python3 {baseDir}/scripts/rh_pool/pool.py reconcile           # resync + download after a restart (no dispatch)
 ```
 
 Statuses: `PENDING` → `DISPATCHED` → `SUCCESS` / `FAILED` / `SUBMIT_FAILED`.
-`outstanding` is how much is still running.
+`outstanding` is how much is still running; `currentBatchId` is null once the
+pool has drained.
 
-Downloaded files land under `data/pool/output/<poolId>/...`; their paths are in
-the task's `downloads_json`.
+Downloaded files land under `data/pool/output/batch-<id>/...` by default; their
+paths are in the task's `downloads_json`.
 
 ## Configuration
 
-`config/skill-config.json` (shipped with the skill):
+`config/skill-config.json` (shipped with the skill) — every key is optional:
 
 | Key | Meaning |
 |-----|---------|
 | `concurrency` | Max jobs in flight at once (default 3) |
 | `pollIntervalSeconds` | Polling cadence — automation tick (Mode A) / watcher tick (Mode B), default 30 |
-| `dataDir` | Ledger + outputs location |
+
+The pool home (`data/pool`, ledger + default outputs) is hardcoded inside the
+skill — no configuration needed on any host.
 
 ## Requirements
 

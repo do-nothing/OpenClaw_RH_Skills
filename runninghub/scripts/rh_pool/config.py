@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import json
 import os
-import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -22,15 +21,16 @@ from pathlib import Path
 SKILL_DIR = Path(__file__).resolve().parents[2]
 CONFIG_DIR = SKILL_DIR / "config"
 
-# Same root the synchronous model/app calls use; pool downloads live in
-# batch-<id> subdirectories under it.
-DEFAULT_OUTPUT_ROOT = Path(tempfile.gettempdir()) / "openclaw" / "rh-output"
+# Hardcoded pool home: ledger + default outputs stay inside the skill so they
+# survive on any host (generic agents included), independent of system temp
+# cleanup. Jobs land in <dataDir>/output/batch-<id>/.
+DEFAULT_DATA_DIR = SKILL_DIR / "data" / "pool"
 
 
 @dataclass
 class PoolConfig:
     concurrency: int = 3
-    dataDir: Path = field(default_factory=lambda: SKILL_DIR / "data" / "pool")
+    dataDir: Path = field(default_factory=lambda: DEFAULT_DATA_DIR)
     outputDir: Path | None = None              # root; jobs land in <root>/batch-<id>/
     defaultInstanceType: str = "default"
     pollIntervalSeconds: int = 30              # polling automation cadence
@@ -41,7 +41,7 @@ class PoolConfig:
 
     @property
     def output_root(self) -> Path:
-        return self.outputDir or DEFAULT_OUTPUT_ROOT
+        return self.outputDir or (self.dataDir / "output")
 
 
 def _config_path() -> Path | None:

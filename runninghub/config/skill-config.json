@@ -2,6 +2,5 @@
   "schemaVersion": "rh-pool-config/1",
   "concurrency": 1,
   "defaultInstanceType": "default",
-  "pollIntervalSeconds": 30,
-  "dataDir": "data/pool"
+  "pollIntervalSeconds": 30
 }

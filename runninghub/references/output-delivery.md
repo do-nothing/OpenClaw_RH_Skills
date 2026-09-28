@@ -26,7 +26,7 @@ Scripts print `OUTPUT_FILE:/path` plus cost/duration lines.
 
 **Generic host:** give each `OUTPUT_FILE:` as a clickable absolute file link.
 
-Workflow pool: one batch → `pool.py outputs --latest` (all `OUTPUT_FILE:` lines + aggregated fees); one task → `pool.py status --pool-id <id> --lines`.
+Workflow pool: one batch → `pool.py outputs --batch-id <batchId>` (the batchId from the enqueue response; `--latest` as fallback) for all `OUTPUT_FILE:` lines + aggregated fees; one task → `pool.py status --pool-id <id> --lines`.
 
 ## Cost reporting
 
