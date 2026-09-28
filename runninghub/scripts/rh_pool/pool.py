@@ -8,8 +8,10 @@ Commands:
   reconcile Re-poll all DISPATCHED tasks and sync state (after restart).
 
 The pool is a pure executor + ledger: it answers "accept work" and "is it
-done". Waiting and notification belong to the caller; when a batch drains, a
-short-lived worker wakes the originating session (see rh_pool/notify.py).
+done". Waiting and notification belong to the caller. Two runners drive it:
+OpenClaw uses scheduled workers that wake the originating session
+(rh_pool/notify.py); Trae uses `watch`, which loops ticks in a background
+task whose process exit carries the completion notification.
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -373,6 +376,38 @@ def cmd_tick(args) -> int:
     return 0
 
 
+def cmd_watch(args) -> int:
+    """Loop ticks in-process until the pool drains, then exit.
+
+    Trae entry point: launch as a background task right after
+    `enqueue --no-notify`. Process exit is the completion signal — the agent
+    host injects a background-task notification back into the originating
+    conversation, so no scheduler, session key, or external CLI is involved.
+    The first tick runs immediately (no startup wait); transient per-tick
+    errors are logged but never kill the watcher.
+    """
+    cfg = load_config()
+    api_key = resolve_api_key(args.api_key)
+    if not api_key:
+        print(json.dumps({"error": "NO_API_KEY"}))
+        return 2
+    interval = max(5, args.interval or cfg.pollIntervalSeconds)
+    while True:
+        try:
+            summary = run_tick(cfg, api_key)
+        except Exception as exc:  # noqa: BLE001 — keep watching through hiccups
+            print(json.dumps({"event": "tick_error", "message": str(exc)},
+                             ensure_ascii=False), flush=True)
+        else:
+            print(json.dumps({"event": "tick", **summary},
+                             ensure_ascii=False), flush=True)
+            if summary["counts"].get("outstanding", 0) == 0:
+                print(json.dumps({"event": "drained", **summary},
+                                 ensure_ascii=False), flush=True)
+                return 0
+        time.sleep(interval)
+
+
 def cmd_reconcile(args) -> int:
     """Force a full poll sync of every DISPATCHED task (post-restart).
 
@@ -468,6 +503,12 @@ def build_parser() -> argparse.ArgumentParser:
     pt = sub.add_parser("tick", help="One non-blocking advance")
     pt.add_argument("--api-key", "-k")
 
+    pwt = sub.add_parser("watch",
+                         help="Loop ticks in a background task until the pool drains")
+    pwt.add_argument("--api-key", "-k")
+    pwt.add_argument("--interval", type=int,
+                     help="poll cadence seconds (default: pollIntervalSeconds)")
+
     pr = sub.add_parser("reconcile", help="Resync active tasks with RH")
     pr.add_argument("--api-key", "-k")
 
@@ -489,6 +530,7 @@ def main(argv: list[str] | None = None) -> int:
     return {
         "enqueue": cmd_enqueue,
         "tick": cmd_tick,
+        "watch": cmd_watch,
         "reconcile": cmd_reconcile,
         "workflow": cmd_workflow,
         "status": cmd_status,

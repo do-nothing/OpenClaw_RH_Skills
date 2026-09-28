@@ -2,7 +2,8 @@
 
 For **batch submission** or **long-running workflows**, use the task pool instead of
 blocking on a single script call. It submits many jobs, runs them within a
-concurrency budget, downloads results, and wakes this session when the batch drains.
+concurrency budget, and downloads results. A background `watch` process exits
+when the batch drains; its completion notification returns to this conversation.
 
 Script: `python3 {baseDir}/scripts/rh_pool/pool.py`
 
@@ -35,13 +36,15 @@ an `api/...` id, or a URL.
 
 ## Submit
 
+Always pass `--no-notify` in Trae (no external scheduler/session-wake CLI):
+
 ```bash
 # one type
-python3 {baseDir}/scripts/rh_pool/pool.py enqueue \
+python3 {baseDir}/scripts/rh_pool/pool.py enqueue --no-notify \
   --type image-gen --param prompt="a cute puppy, 4K cinematic"
 
 # a batch from a file (list of jobs)
-python3 {baseDir}/scripts/rh_pool/pool.py enqueue --from-file jobs.json
+python3 {baseDir}/scripts/rh_pool/pool.py enqueue --no-notify --from-file jobs.json
 ```
 
 `jobs.json`:
@@ -53,13 +56,20 @@ python3 {baseDir}/scripts/rh_pool/pool.py enqueue --from-file jobs.json
 ]
 ```
 
-`enqueue` returns `poolIds`. **Submitting is the whole job for you** — your turn
-ends here. Do NOT poll `status`, sleep, or wait for completion in-loop; the pool
-wakes this session when the batch drains. Tell the user it started (see
-notification rules below), then end the turn.
+`enqueue` returns `poolIds`. Then immediately launch the watcher **as a
+background task** (Shell `run_in_background`; do NOT run it foreground, and do
+NOT poll/sleep yourself):
 
-To have the finished batch wake a specific session, set `OPENCLAW_SESSION_KEY`
-before enqueueing; otherwise it wakes the configured default (`sessionKey`).
+```bash
+python3 {baseDir}/scripts/rh_pool/pool.py watch
+```
+
+It ticks once immediately, then every `pollIntervalSeconds`, until the pool
+reaches zero outstanding jobs and exits. Process exit is the completion signal:
+the agent host posts the background-task notification into THIS conversation.
+After launching it, tell the user work has started and end your turn — never
+poll or sleep yourself. When the notification arrives, run `status` and deliver
+the files (see below). No session key is involved.
 
 ## Check progress
 
@@ -72,24 +82,29 @@ Statuses: `PENDING` → `DISPATCHED` → `SUCCESS` / `FAILED` / `SUBMIT_FAILED`.
 `outstanding` is how much is still running.
 
 Downloaded files land under `data/pool/output/<poolId>/...`; their paths are in
-the task's `downloads_json`. **Deliver them with the `message` tool** exactly as
-in `references/output-delivery.md`.
+the task's `downloads_json`. **Deliver them as clickable absolute file links**
+(the `message` tool does not exist in Trae).
 
-## Notification
+## Background watcher
 
-On submit, the pool creates one polling automation (no LLM cost). When the batch
-drains it wakes the originating session, which then reads `status` and delivers
-the files. You do not manage this automation by hand.
+The watcher (`pool.py watch`, one per pool) runs ticks with zero LLM cost and
+exits when the batch drains — its process-exit notification is the only
+completion signal. You do not poll by hand.
+
+Recovery: a background watcher is bound to this IDE session; if the IDE was
+closed while jobs were in flight, run `pool.py reconcile` once in the next
+session to resync states and download finished outputs, then start `watch`
+again if anything is still outstanding.
 
 Tune it in `config/skill-config.json` (copy the `.example`):
 
 | Key | Meaning |
 |-----|---------|
 | `concurrency` | Max jobs in flight at once (default 3) |
-| `pollIntervalSeconds` | Polling cadence (default 30) |
-| `sessionKey` | Default wake-back session |
+| `pollIntervalSeconds` | Watcher poll cadence (default 30) |
 | `dataDir` | Ledger + outputs location |
 
 ## Requirements
 
-`python3`, `curl`, and the `openclaw` CLI on `PATH` (or set `OPENCLAW_BIN`).
+`python3` and `curl` on `PATH`. No `openclaw` CLI or scheduler is needed in the
+Trae flow (`--no-notify` on every enqueue; `notify.py` stays unused).
