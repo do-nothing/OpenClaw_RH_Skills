@@ -1,0 +1,71 @@
+{
+  "1": {
+    "inputs": {
+      "top_k": 30,
+      "top_p": 0.8,
+      "temperature": 0.8,
+      "num_beams": 3,
+      "max_mel_tokens": 1500,
+      "max_text_tokens_per_sentence": 120,
+      "custom_cuda_kernel": false,
+      "deepspeed": true,
+      "unload_model": true,
+      "emo_alpha": 1,
+      "emo_vector": "[0,0,0,0,0,0,0,0]",
+      "use_emo_text": false,
+      "emo_text": "",
+      "use_random": true,
+      "emo_alpha_s2": 1,
+      "emo_vector_s2": "",
+      "use_emo_text_s2": false,
+      "emo_text_s2": "",
+      "use_random_s2": false,
+      "audio": [
+        "17",
+        0
+      ],
+      "text": [
+        "4",
+        0
+      ]
+    },
+    "class_type": "IndexTTS2Run",
+    "_meta": {
+      "title": "IndexTTS2 Run"
+    }
+  },
+  "4": {
+    "inputs": {
+      "text": "我是段晓耘，“资于食”的创始人。\n那个让我下定决心的时刻，是深夜在《千金要方》里读到的八个字：“安身之本，必资于食。”。\n药王孙思邈在一千四百年前的这句话，像一束光，照亮了我的方向。\n我们能用今天的科学，让这句古老的智慧重新发光吗？\n于是，在杭州，我们开始了这场探索。用基因检测、代谢科学，与古老的“食治”智慧对话。\n我们想弄明白，为什么特定的食物能调理身体，又如何为每一个独特的你，找到那把专属的“健康钥匙”。\n当看到一位位朋友通过精准饮食找回活力时，我知道，我们做对了。\n资于食，就是让“吃饭”这件小事，成为你健康最可靠的投资。\n安身之本，必资于食。 \n让我们，一起好好吃饭。\n"
+    },
+    "class_type": "Text Multiline",
+    "_meta": {
+      "title": "Text Multiline"
+    }
+  },
+  "16": {
+    "inputs": {
+      "filename_prefix": "audio/ComfyUI",
+      "quality": "V0",
+      "audioUI": "",
+      "audio": [
+        "1",
+        0
+      ]
+    },
+    "class_type": "SaveAudioMP3",
+    "_meta": {
+      "title": "Save Audio (MP3) (DEPRECATED)"
+    }
+  },
+  "17": {
+    "inputs": {
+      "audio": "33bb5494a62dcdb768aa82188d18aa5a61a6e48770b25d184fcfa81dea4a3236.m4a",
+      "audioUI": ""
+    },
+    "class_type": "LoadAudio",
+    "_meta": {
+      "title": "Load Audio"
+    }
+  }
+}

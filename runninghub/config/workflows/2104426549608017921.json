@@ -1,0 +1,189 @@
+{
+  "2": {
+    "inputs": {
+      "prompt": [
+        "18",
+        0
+      ],
+      "seed": 1717670917,
+      "aspectRatio": "3:4",
+      "resolution": "1k",
+      "skip_error": false,
+      "channel": "Third-party",
+      "images": [
+        "3",
+        0
+      ],
+      "image1": [
+        "7",
+        0
+      ],
+      "image2": [
+        "8",
+        0
+      ],
+      "image3": [
+        "17",
+        0
+      ],
+      "image4": [
+        "11",
+        0
+      ],
+      "image5": [
+        "15",
+        0
+      ],
+      "image6": [
+        "12",
+        0
+      ],
+      "image7": [
+        "13",
+        0
+      ],
+      "image8": [
+        "16",
+        0
+      ],
+      "image9": [
+        "14",
+        0
+      ]
+    },
+    "class_type": "RH_Nano_Banana2_Gemini31Flash",
+    "_meta": {
+      "title": "RH NanoBanana2 gemini-3.1-flash-image-preview 🆕"
+    }
+  },
+  "3": {
+    "inputs": {
+      "image": "72462a8b2eb59dc82020ce9532de7de9ece9683837d038e6c0b6a9212aa87db7.jpeg"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  },
+  "4": {
+    "inputs": {
+      "filename_prefix": "ComfyUI",
+      "images": [
+        "2",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Image"
+    }
+  },
+  "7": {
+    "inputs": {
+      "image": "72462a8b2eb59dc82020ce9532de7de9ece9683837d038e6c0b6a9212aa87db7.jpeg"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  },
+  "8": {
+    "inputs": {
+      "image": "72462a8b2eb59dc82020ce9532de7de9ece9683837d038e6c0b6a9212aa87db7.jpeg"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  },
+  "11": {
+    "inputs": {
+      "image": "72462a8b2eb59dc82020ce9532de7de9ece9683837d038e6c0b6a9212aa87db7.jpeg"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  },
+  "12": {
+    "inputs": {
+      "image": "72462a8b2eb59dc82020ce9532de7de9ece9683837d038e6c0b6a9212aa87db7.jpeg"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  },
+  "13": {
+    "inputs": {
+      "image": "72462a8b2eb59dc82020ce9532de7de9ece9683837d038e6c0b6a9212aa87db7.jpeg"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  },
+  "14": {
+    "inputs": {
+      "image": "72462a8b2eb59dc82020ce9532de7de9ece9683837d038e6c0b6a9212aa87db7.jpeg"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  },
+  "15": {
+    "inputs": {
+      "image": "72462a8b2eb59dc82020ce9532de7de9ece9683837d038e6c0b6a9212aa87db7.jpeg"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  },
+  "16": {
+    "inputs": {
+      "image": "72462a8b2eb59dc82020ce9532de7de9ece9683837d038e6c0b6a9212aa87db7.jpeg"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  },
+  "17": {
+    "inputs": {
+      "image": "72462a8b2eb59dc82020ce9532de7de9ece9683837d038e6c0b6a9212aa87db7.jpeg"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  },
+  "18": {
+    "inputs": {
+      "prompt": "很多很多的香蕉大甩卖"
+    },
+    "class_type": "CR Prompt Text",
+    "_meta": {
+      "title": "⚙️ CR Prompt Text"
+    }
+  },
+  "21": {
+    "inputs": {
+      "image": "75effaf9bce3bc09f4136166e75ec27958ca4c3a10a5483e5e4e22da2640cca7.jpg"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  },
+  "22": {
+    "inputs": {
+      "image": "bbe4048aea48bd74983e5f20a3df74310db1b95d5d62a3c5aac5de7d5636ff9a.jpg"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  }
+}

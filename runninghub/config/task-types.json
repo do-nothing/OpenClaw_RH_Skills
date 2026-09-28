@@ -1,0 +1,292 @@
+{
+  "schemaVersion": "rh-task-types/1",
+  "types": [
+    {
+      "typeId": "voice-clone",
+      "version": 1,
+      "displayName": "语音克隆 v1",
+      "description": "IndexTTS2：用一段参考音频克隆音色并合成语音。",
+      "workflowId": "1991003046928916481",
+      "instanceType": "default",
+      "params": [
+        {
+          "name": "text",
+          "label": "语音文字",
+          "type": "text",
+          "required": true,
+          "nodeId": "4",
+          "fieldName": "text"
+        },
+        {
+          "name": "referenceAudio",
+          "label": "参考声音",
+          "type": "audio",
+          "required": true,
+          "nodeId": "17",
+          "fieldName": "audio",
+          "accept": [".mp3", ".wav", ".m4a", ".m3a"]
+        },
+        {
+          "name": "emoText",
+          "label": "情绪描述文本",
+          "type": "text",
+          "required": false,
+          "default": "",
+          "nodeId": "1",
+          "fieldName": "emo_text"
+        }
+      ],
+      "fixedOverrides": []
+    },
+    {
+      "typeId": "voice-clone-emo",
+      "version": 1,
+      "displayName": "IndexTTS2 音色克隆（带语气）",
+      "description": "IndexTTS2：用主参考音频克隆音色，并可选提供情绪参考音频复刻说话语气；不传情绪音频时使用工作流默认音频。",
+      "workflowId": "2103675587473788929",
+      "instanceType": "default",
+      "params": [
+        {
+          "name": "text",
+          "label": "语音文字",
+          "type": "text",
+          "required": true,
+          "nodeId": "14",
+          "fieldName": "value"
+        },
+        {
+          "name": "referenceAudio",
+          "label": "参考声音",
+          "type": "audio",
+          "required": true,
+          "nodeId": "13",
+          "fieldName": "audio",
+          "accept": [".mp3", ".wav", ".m4a", ".m3a"]
+        },
+        {
+          "name": "emotionAudio",
+          "label": "情绪参考音频",
+          "type": "audio",
+          "required": false,
+          "nodeId": "15",
+          "fieldName": "audio",
+          "accept": [".mp3", ".wav", ".m4a", ".m3a"]
+        }
+      ],
+      "fixedOverrides": []
+    },
+    {
+      "typeId": "digital-human",
+      "version": 1,
+      "displayName": "数字人生成",
+      "description": "Wan MultiTalk：人物照片 + 配音音频 + 文案，生成口播数字人。",
+      "workflowId": "1968591880252469250",
+      "instanceType": "default",
+      "params": [
+        {
+          "name": "image",
+          "label": "人物照片",
+          "type": "image",
+          "required": true,
+          "nodeId": "133",
+          "fieldName": "image",
+          "accept": [".jpg", ".jpeg", ".png"]
+        },
+        {
+          "name": "audio",
+          "label": "配音音频",
+          "type": "audio",
+          "required": true,
+          "nodeId": "204",
+          "fieldName": "audio",
+          "accept": [".mp3", ".wav", ".m4a", ".m3a"]
+        },
+        {
+          "name": "text",
+          "label": "语音文字",
+          "type": "text",
+          "required": true,
+          "nodeId": "205",
+          "fieldName": "text"
+        }
+      ],
+      "fixedOverrides": []
+    },
+    {
+      "typeId": "image-gen",
+      "version": 1,
+      "displayName": "文生图（公共案例）",
+      "description": "公共 ComfyUI 文生图工作流。",
+      "workflowId": "1904136902449209346",
+      "instanceType": "default",
+      "params": [
+        {
+          "name": "prompt",
+          "label": "画面描述",
+          "type": "text",
+          "required": true,
+          "nodeId": "6",
+          "fieldName": "text"
+        }
+      ],
+      "fixedOverrides": []
+    },
+    {
+      "typeId": "music-minimax",
+      "version": 1,
+      "displayName": "MiniMax Music 3 文生音频",
+      "description": "MiniMax Music 3：根据音乐风格描述与歌词生成歌曲，歌词留空生成纯音乐。",
+      "workflowId": "2103357697491038209",
+      "instanceType": "default",
+      "params": [
+        {
+          "name": "prompt",
+          "label": "音乐风格描述",
+          "type": "text",
+          "required": true,
+          "nodeId": "45",
+          "fieldName": "caption"
+        },
+        {
+          "name": "lyrics",
+          "label": "歌词",
+          "type": "text",
+          "required": false,
+          "default": "",
+          "nodeId": "45",
+          "fieldName": "lyrics"
+        }
+      ],
+      "fixedOverrides": []
+    },
+    {
+      "typeId": "image-edit-banana2",
+      "version": 2,
+      "displayName": "全能图片（文生图 / 多图编辑，Nano Banana 2）",
+      "description": "Nano Banana 2 / Gemini 3.1 Flash：不传任何图片为文生图；传 1 张为图片编辑；最多传 10 张做多图参考/融合。未用图片槽固定下发空串，保持无输入。",
+      "workflowId": "2104426549608017921",
+      "instanceType": "default",
+      "params": [
+        {
+          "name": "prompt",
+          "label": "画面指令",
+          "type": "text",
+          "required": true,
+          "nodeId": "18",
+          "fieldName": "prompt"
+        },
+        {
+          "name": "image",
+          "label": "参考图片 1（留空=文生图）",
+          "type": "image",
+          "required": false,
+          "default": "",
+          "nodeId": "3",
+          "fieldName": "image",
+          "accept": [".jpg", ".jpeg", ".png", ".webp"]
+        },
+        {
+          "name": "image2",
+          "label": "参考图片 2",
+          "type": "image",
+          "required": false,
+          "default": "",
+          "nodeId": "7",
+          "fieldName": "image",
+          "accept": [".jpg", ".jpeg", ".png", ".webp"]
+        },
+        {
+          "name": "image3",
+          "label": "参考图片 3",
+          "type": "image",
+          "required": false,
+          "default": "",
+          "nodeId": "8",
+          "fieldName": "image",
+          "accept": [".jpg", ".jpeg", ".png", ".webp"]
+        },
+        {
+          "name": "image4",
+          "label": "参考图片 4",
+          "type": "image",
+          "required": false,
+          "default": "",
+          "nodeId": "17",
+          "fieldName": "image",
+          "accept": [".jpg", ".jpeg", ".png", ".webp"]
+        },
+        {
+          "name": "image5",
+          "label": "参考图片 5",
+          "type": "image",
+          "required": false,
+          "default": "",
+          "nodeId": "11",
+          "fieldName": "image",
+          "accept": [".jpg", ".jpeg", ".png", ".webp"]
+        },
+        {
+          "name": "image6",
+          "label": "参考图片 6",
+          "type": "image",
+          "required": false,
+          "default": "",
+          "nodeId": "15",
+          "fieldName": "image",
+          "accept": [".jpg", ".jpeg", ".png", ".webp"]
+        },
+        {
+          "name": "image7",
+          "label": "参考图片 7",
+          "type": "image",
+          "required": false,
+          "default": "",
+          "nodeId": "12",
+          "fieldName": "image",
+          "accept": [".jpg", ".jpeg", ".png", ".webp"]
+        },
+        {
+          "name": "image8",
+          "label": "参考图片 8",
+          "type": "image",
+          "required": false,
+          "default": "",
+          "nodeId": "13",
+          "fieldName": "image",
+          "accept": [".jpg", ".jpeg", ".png", ".webp"]
+        },
+        {
+          "name": "image9",
+          "label": "参考图片 9",
+          "type": "image",
+          "required": false,
+          "default": "",
+          "nodeId": "16",
+          "fieldName": "image",
+          "accept": [".jpg", ".jpeg", ".png", ".webp"]
+        },
+        {
+          "name": "image10",
+          "label": "参考图片 10",
+          "type": "image",
+          "required": false,
+          "default": "",
+          "nodeId": "14",
+          "fieldName": "image",
+          "accept": [".jpg", ".jpeg", ".png", ".webp"]
+        },
+        {
+          "name": "aspectRatio",
+          "label": "画面比例",
+          "type": "enum",
+          "required": false,
+          "default": "3:4",
+          "enum": ["auto", "1:1", "1:4", "1:8", "2:3", "3:2", "3:4", "4:1", "4:3", "4:5", "5:4", "8:1", "9:16", "16:9", "21:9"],
+          "nodeId": "2",
+          "fieldName": "aspectRatio"
+        }
+      ],
+      "fixedOverrides": []
+    }
+  ]
+}

@@ -4,4 +4,4 @@
 
 - 命名：`<workflowId>.json`
 - 用途：任务类型校验的真相来源（核对 nodeId / fieldName 是否存在），可很大。
-- 本目录下所有 `.json` 被 .gitignore 忽略，属于私有文件；`.json.example` 模板不受影响。
+- `<workflowId>.json` 归档随仓库公开提交；非归档命名的原始导出仅作本地参考，可不入库。

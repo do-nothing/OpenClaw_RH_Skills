@@ -22,8 +22,8 @@ not pool workflow types.
 
 ## Task types
 
-Named types live in `config/task-types.json` (copy `task-types.json.example` to
-start). Each type maps friendly params to a workflow's node inputs.
+Named types live in `config/task-types.json` (shipped with the skill). Each
+type maps friendly params to a workflow's node inputs.
 
 ```bash
 # what is available / validate against archived workflow exports
@@ -96,7 +96,7 @@ closed while jobs were in flight, run `pool.py reconcile` once in the next
 session to resync states and download finished outputs, then start `watch`
 again if anything is still outstanding.
 
-Tune it in `config/skill-config.json` (copy the `.example`):
+Tune it in `config/skill-config.json` (shipped with the skill):
 
 | Key | Meaning |
 |-----|---------|
