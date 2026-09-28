@@ -473,12 +473,14 @@ def _protocol_lines(row: dict) -> list[str]:
     coins = row.get("cost_coins")
     if coins:
         lines.append(f"COINS:{int(coins)}")
+    # Cash amounts carry no currency symbol: ¥ vs $ is determined by the API
+    # key's site; the agent phrases it as ¥/$ when reporting.
     money = row.get("cost_money")
     if money:
-        lines.append(f"COST:¥{float(money):.2f}")
+        lines.append(f"COST:{float(money):.2f}")
     third = row.get("cost_third_party_money")
     if third:
-        lines.append(f"THIRD_PARTY:¥{float(third):.2f}")
+        lines.append(f"THIRD_PARTY:{float(third):.2f}")
     duration = row.get("cost_time_s")
     if duration:
         lines.append(f"DURATION:{int(duration)}s")
