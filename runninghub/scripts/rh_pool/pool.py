@@ -92,6 +92,35 @@ def _coerce_scalar(p, value):
     return value if isinstance(value, str) else str(value)
 
 
+def _resolve_file_param(p, value, store: Store, api_key: str | None,
+                        inputs: list) -> str:
+    """Resolve one non-empty file param to an RH-side reference string.
+
+    Local paths are uploaded (cached); api/ ids and URLs pass through.
+    Records the provenance in `inputs`. Raises ValueError on unusable values.
+    """
+    kind = transfer.classify(value)
+    if kind == "local":
+        if not api_key:
+            raise ValueError("no API key available for upload")
+        up = transfer.upload_with_cache(store, api_key, value)
+        if not up.get("ok"):
+            raise ValueError(
+                f"upload failed for '{p.name}': {up.get('error_message')}")
+        inputs.append({"param": p.name, "fieldName": p.fieldName,
+                       "localPath": str(Path(value).resolve()),
+                       "rhFileName": up["file_name"],
+                       "cached": bool(up.get("cached"))})
+        return up["file_name"]
+    if kind in ("rh_id", "url"):
+        inputs.append({"param": p.name, "fieldName": p.fieldName,
+                       "localPath": None, "rhFileName": value,
+                       "cached": True})
+        return value
+    raise ValueError(
+        f"param '{p.name}': file not found or unusable: {value!r}")
+
+
 def _resolve_job(job: dict, store: Store, api_key: str | None, cfg) -> dict:
     """Turn a requested job into a stored job: resolve the task type, upload any
     local file inputs (cached), and build node_overrides. Raises ValueError.
@@ -116,27 +145,15 @@ def _resolve_job(job: dict, store: Store, api_key: str | None, cfg) -> dict:
             else:
                 continue
             if p.type in transfer.FILE_TYPES:
-                kind = transfer.classify(value)
-                if kind == "local":
-                    if not api_key:
-                        raise ValueError("no API key available for upload")
-                    up = transfer.upload_with_cache(store, api_key, value)
-                    if not up.get("ok"):
-                        raise ValueError(
-                            f"upload failed for '{p.name}': {up.get('error_message')}")
-                    field_value = up["file_name"]
-                    inputs.append({"param": p.name, "fieldName": p.fieldName,
-                                   "localPath": str(Path(value).resolve()),
-                                   "rhFileName": up["file_name"],
-                                   "cached": bool(up.get("cached"))})
-                elif kind in ("rh_id", "url"):
-                    field_value = value
-                    inputs.append({"param": p.name, "fieldName": p.fieldName,
-                                   "localPath": None, "rhFileName": value,
-                                   "cached": True})
+                if isinstance(value, str) and not value.strip():
+                    # Explicit empty string: leave an optional media slot unset.
+                    # RunningHub treats "" on a LoadImage field as "no input"
+                    # (verified on RH_Nano_Banana2: null is rejected, "" empties
+                    # the slot — enables text-to-image and sparse multi-image).
+                    field_value = ""
                 else:
-                    raise ValueError(
-                        f"param '{p.name}': file not found or unusable: {value!r}")
+                    field_value = _resolve_file_param(
+                        p, value, store, api_key, inputs)
             else:
                 field_value = _coerce_scalar(p, value)
             nodes.append({"nodeId": p.nodeId, "fieldName": p.fieldName,
