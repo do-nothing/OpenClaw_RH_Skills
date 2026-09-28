@@ -75,8 +75,12 @@ for the first 30s boundary. The JSON response contains `"mode": "openclaw"`,
   NOT poll `status`, sleep, or wait in-loop.
 - When the batch drains, the automation wakes exactly the session whose key
   you passed, then removes itself (one wake-up per batch). When you are woken:
-  run `pool.py status`, then deliver files with the **`message` tool** exactly
-  as in `references/output-delivery.md`.
+  run `pool.py status`; for each finished task get its protocol lines with
+  `pool.py status --pool-id <id> --lines` (`OUTPUT_FILE:` / `COINS:` /
+  `COST:` / `THIRD_PARTY:` / `DURATION:`), then deliver exactly per
+  `references/output-delivery.md` — on openclaw that means the `message`
+  tool and the cost-reporting rules there. (Batch-level protocol output is
+  planned with the batch work; for now iterate per task.)
 - **Errors are reported, never auto-degraded.** If the response shows
   `automation.action == "error"` or `kick.action == "failed"` (the command
   exits non-zero), tell the user what went wrong verbatim — do NOT retry as
@@ -111,12 +115,16 @@ user's next message. Therefore:
    一句话，我立刻查收并交付～", then end your turn. Never poll or sleep yourself.
 2. Whenever the user returns (a completion event may be attached to their
    message), your **first** action is `pool.py status`.
-3. If the host/IDE was restarted while jobs were in flight, first run
+3. For each finished task run `pool.py status --pool-id <id> --lines` and
+   deliver the `OUTPUT_FILE:` paths as **clickable absolute file links**
+   (generic-host column of `references/output-delivery.md`), reporting
+   non-zero `COINS:` / `COST:` / `THIRD_PARTY:` lines per the cost rules.
+   Never paste RunningHub internal URLs. (Batch-level protocol output is
+   planned with the batch work; for now iterate per task.)
+4. If the host/IDE was restarted while jobs were in flight, first run
    `pool.py reconcile` (resync states + download finished outputs); if anything
    is still outstanding, restart a watcher in the background with
    `python3 {baseDir}/scripts/rh_pool/notify.py watch`.
-4. Deliver outputs as **clickable absolute file links** (there is no `message`
-   tool on generic hosts). Never paste RunningHub internal URLs.
 
 ## Manual enqueue (testing / debugging)
 
@@ -152,10 +160,6 @@ the task's `downloads_json`.
 | `concurrency` | Max jobs in flight at once (default 3) |
 | `pollIntervalSeconds` | Polling cadence — automation tick (Mode A) / watcher tick (Mode B), default 30 |
 | `dataDir` | Ledger + outputs location |
-
-The Mode A wake target is not configured: it comes from `--openclawSessionKey`
-on every enqueue. A hardcoded fallback (`agent:main:main`) exists in code for
-the edge case of draining tasks that somehow recorded no session.
 
 ## Requirements
 

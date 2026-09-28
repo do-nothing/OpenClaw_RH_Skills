@@ -459,14 +459,54 @@ def cmd_workflow(args) -> int:
     return 0 if all(r.ok for r in reports) else 1
 
 
+def _protocol_lines(row: dict) -> list[str]:
+    """Render one finished task as model-call-compatible stdout lines.
+
+    Mirrors runninghub.py: OUTPUT_FILE: / COST: / DURATION:, extended with
+    COINS: and THIRD_PARTY: for the pool's three fee fields. Zero/null fee
+    items are omitted. Files are listed only when the download succeeded.
+    """
+    lines: list[str] = []
+    for dl in row.get("downloads_json") or []:
+        if dl.get("ok") and dl.get("path"):
+            lines.append(f"OUTPUT_FILE:{dl['path']}")
+    coins = row.get("cost_coins")
+    if coins:
+        lines.append(f"COINS:{int(coins)}")
+    money = row.get("cost_money")
+    if money:
+        lines.append(f"COST:¥{float(money):.2f}")
+    third = row.get("cost_third_party_money")
+    if third:
+        lines.append(f"THIRD_PARTY:¥{float(third):.2f}")
+    duration = row.get("cost_time_s")
+    if duration:
+        lines.append(f"DURATION:{int(duration)}s")
+    if row.get("status") == "FAILED" and row.get("error_message"):
+        lines.append(f"ERROR:{row['error_message']}")
+    return lines
+
+
 def cmd_status(args) -> int:
     cfg = load_config()
     store = Store(cfg.db_path)
     if args.pool_id is not None or args.rh_task_id:
         row = store.get_task(pool_id=args.pool_id, rh_task_id=args.rh_task_id)
-        print(json.dumps(row_to_dict(row) if row else {"error": "NOT_FOUND"},
-                         ensure_ascii=False, indent=2))
-        return 0 if row else 1
+        if not row:
+            print(json.dumps({"error": "NOT_FOUND"},
+                             ensure_ascii=False, indent=2))
+            return 1
+        data = row_to_dict(row)
+        if getattr(args, "lines", False):
+            # Model-call-compatible protocol lines (single task only).
+            for line in _protocol_lines(data):
+                print(line)
+        else:
+            print(json.dumps(data, ensure_ascii=False, indent=2))
+        return 0
+    if getattr(args, "lines", False):
+        print("--lines requires --pool-id or --rh-task-id", file=sys.stderr)
+        return 2
     rows = store.list_tasks(status=args.status_filter, limit=args.limit)
     out = {
         "counts": store.count_status(),
@@ -523,6 +563,9 @@ def build_parser() -> argparse.ArgumentParser:
     ps.add_argument("--rh-task-id")
     ps.add_argument("--status-filter")
     ps.add_argument("--limit", type=int, default=50)
+    ps.add_argument("--lines", action="store_true",
+                    help="single task only: print model-call-compatible "
+                         "OUTPUT_FILE/COINS/COST/THIRD_PARTY/DURATION lines")
 
     return p
 
