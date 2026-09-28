@@ -54,6 +54,30 @@ python3 {baseDir}/scripts/rh_pool/pool.py workflow validate
 A type's file params accept **a local path** (uploaded automatically, cached),
 an `api/...` id, or a URL.
 
+## Output locations and names
+
+- **Default (throwaway tasks):** system temp root
+  `<tmp>/openclaw/rh-output/batch-<batchId>/<poolId>_<nodeId>_<idx>.<ext>` —
+  same root as synchronous calls, grouped per batch. Missing parent dirs are
+  created automatically.
+- **Real projects:** give each job its own `outputDir` (no batch subdir is
+  added) and optional `outputName` (basename **without extension**; the real
+  extension comes from the result). Multiple results get `_0`, `_1` suffixes;
+  rerunning a job overwrites. Jobs in one batch may use different dirs/names:
+
+```json
+[
+  {"type": "image-edit-banana2", "params": {"prompt": "beat 1 wide"},
+   "outputDir": "D:/film/keyframes", "outputName": "kf_1a"},
+  {"type": "digital-human",
+   "params": {"image": "D:/film/keyframes/kf_1a.png", "audio": "D:/film/a.m4a", "text": "..."},
+   "outputDir": "D:/film/clips", "outputName": "clip_1a"}
+]
+```
+
+  CLI equivalents: `--output-dir DIR` (default for every job in `--from-file`,
+  overridable per job) and `--output-name NAME` (single-job enqueue).
+
 ## Submit — Mode A: openclaw
 
 Take the session key verbatim from the **`session=` field of your runtime
@@ -88,12 +112,12 @@ for the first 30s boundary. The JSON response contains `"mode": "openclaw"`,
   NOT poll `status`, sleep, or wait in-loop.
 - When the batch drains, the automation wakes exactly the session whose key
   you passed, then removes itself (one wake-up per batch). When you are woken:
-  run `pool.py status`; for each finished task get its protocol lines with
-  `pool.py status --pool-id <id> --lines` (`OUTPUT_FILE:` / `COINS:` /
-  `COST:` / `THIRD_PARTY:` / `DURATION:`), then deliver exactly per
-  `references/output-delivery.md` — on openclaw that means the `message`
-  tool and the cost-reporting rules there. (Batch-level protocol output is
-  planned with the batch work; for now iterate per task.)
+  run `pool.py outputs --latest` for the drained batch's protocol lines
+  (`BATCH:` header with per-state counts, every `OUTPUT_FILE:`, aggregated
+  `COINS:`/`COST:`/`THIRD_PARTY:`, max `DURATION:`, one `ERROR:<poolId>: …`
+  per failure), then deliver exactly per `references/output-delivery.md` —
+  on openclaw that means the `message` tool and the cost-reporting rules
+  there. One task's detail: `status --pool-id <id> --lines`.
 - **Errors are reported, never auto-degraded.** If the response shows
   `automation.action == "error"` or `kick.action == "failed"` (the command
   exits non-zero), tell the user what went wrong verbatim — do NOT retry as
@@ -128,12 +152,11 @@ user's next message. Therefore:
    一句话，我立刻查收并交付～", then end your turn. Never poll or sleep yourself.
 2. Whenever the user returns (a completion event may be attached to their
    message), your **first** action is `pool.py status`.
-3. For each finished task run `pool.py status --pool-id <id> --lines` and
-   deliver the `OUTPUT_FILE:` paths as **clickable absolute file links**
-   (generic-host column of `references/output-delivery.md`), reporting
-   non-zero `COINS:` / `COST:` / `THIRD_PARTY:` lines per the cost rules.
-   Never paste RunningHub internal URLs. (Batch-level protocol output is
-   planned with the batch work; for now iterate per task.)
+3. Run `pool.py outputs --latest` and deliver the `OUTPUT_FILE:` paths as
+   **clickable absolute file links** (generic-host column of
+   `references/output-delivery.md`), reporting the aggregated non-zero
+   `COINS:` / `COST:` / `THIRD_PARTY:` lines per the cost rules. Never paste
+   RunningHub internal URLs. One task's detail: `status --pool-id <id> --lines`.
 4. If the host/IDE was restarted while jobs were in flight, first run
    `pool.py reconcile` (resync states + download finished outputs); if anything
    is still outstanding, restart a watcher in the background with

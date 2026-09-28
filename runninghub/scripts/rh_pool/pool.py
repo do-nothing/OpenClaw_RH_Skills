@@ -60,8 +60,10 @@ def build_job_from_args(args) -> dict:
         "instance_type": instance,
         "node_overrides": nodes,
     }
-    if getattr(args, "output", None):
-        job["outputDir"] = args.output
+    if getattr(args, "output_dir", None):
+        job["outputDir"] = args.output_dir
+    if getattr(args, "output_name", None):
+        job["outputName"] = args.output_name
     return job
 
 
@@ -166,6 +168,8 @@ def _resolve_job(job: dict, store: Store, api_key: str | None, cfg) -> dict:
                    "instanceType": instance}
         if job.get("outputDir"):
             request["outputDir"] = job["outputDir"]
+        if job.get("outputName"):
+            request["outputName"] = str(job["outputName"])
         return {"workflow_id": t.workflowId, "instance_type": instance,
                 "node_overrides": nodes, "request_json": request,
                 "inputs": inputs}
@@ -178,6 +182,8 @@ def _resolve_job(job: dict, store: Store, api_key: str | None, cfg) -> dict:
     request = {"workflowId": job["workflow_id"], "instanceType": instance}
     if job.get("outputDir"):
         request["outputDir"] = job["outputDir"]
+    if job.get("outputName"):
+        request["outputName"] = str(job["outputName"])
     return {"workflow_id": job["workflow_id"], "instance_type": instance,
             "node_overrides": job.get("node_overrides") or [],
             "request_json": request, "inputs": job.get("inputs") or []}
@@ -192,11 +198,17 @@ def cmd_enqueue(args) -> int:
         jobs = json.loads(Path(args.from_file).read_text(encoding="utf-8"))
         if isinstance(jobs, dict):
             jobs = [jobs]
+        # CLI-level dir is the default for file jobs that do not name their
+        # own; per-job outputDir/outputName in the file win.
+        if getattr(args, "output_dir", None):
+            for job in jobs:
+                job.setdefault("outputDir", args.output_dir)
     else:
         if args.type:
             jobs = [{"type": args.type, "params": _parse_kv(args.param),
                      "instance_type": args.instance_type,
-                     "outputDir": args.output}]
+                     "outputDir": args.output_dir,
+                     "outputName": args.output_name}]
         elif args.workflow_id:
             jobs = [build_job_from_args(args)]
         else:
@@ -290,21 +302,50 @@ def _dispatch_pending(store: Store, api_key: str, concurrency: int,
     return summary
 
 
-def _download_outputs(store: Store, row, results: list[dict], cfg) -> list[dict]:
-    """Download result files for a finished task into the output tree.
+def _safe_stem(name: str, ext: str) -> str | None:
+    """Normalize a caller-supplied output name to a bare extensionless stem.
 
-    Layout: <output_root>/<poolId>_<nodeId>_<idx>.<ext>  (or per-job outputDir).
+    Directory components and ANY trailing extension are dropped: the real
+    extension always comes from RunningHub's outputType, so a caller-supplied
+    "kf.jpg" with a png result yields "kf.png", never "kf.jpg.png". Returns
+    None when nothing usable remains.
+    """
+    stem = Path(str(name)).name.strip()
+    return Path(stem).stem or None
+
+
+def _download_outputs(store: Store, row, results: list[dict], cfg) -> list[dict]:
+    """Download result files for a finished task.
+
+    Default layout:  <output_root>/batch-<batchId>/<poolId>_<nodeId>_<idx>.<ext>
+    Custom outputDir + optional outputName:
+      <outputDir>/<name>.<ext>            (single result)
+      <outputDir>/<name>_0.<ext>, ...     (multiple results; overwrite reruns)
     """
     req = _loads(row["request_json"]) or {}
-    base = Path(req.get("outputDir")) if req.get("outputDir") else (cfg.output_root / str(row["id"]))
+    custom_dir = req.get("outputDir")
+    if custom_dir:
+        base = Path(custom_dir)
+    else:
+        base = cfg.output_root / f"batch-{row['batch_id']}"
+    items = [it for it in (results or [])
+             if (it.get("url") or it.get("outputUrl"))]
+    multi = len(items) > 1
     downloads: list[dict] = []
-    for idx, item in enumerate(results or []):
+    for seq, item in enumerate(items):
         url = item.get("url") or item.get("outputUrl")
-        if not url:
-            continue
         ext = item.get("outputType") or "bin"
         node = item.get("nodeId") or "out"
-        target = base / f"{row['id']}_{node}_{idx}.{ext}"
+        name = req.get("outputName") if custom_dir else None
+        stem = _safe_stem(name, ext) if name else None
+        if stem:
+            filename = f"{stem}_{seq}.{ext}" if multi else f"{stem}.{ext}"
+        else:
+            # Default identity; idx in the raw result list is kept for stable
+            # node-slot correspondence across reruns.
+            idx = (results or []).index(item)
+            filename = f"{row['id']}_{node}_{idx}.{ext}"
+        target = base / filename
         dl = transfer.download_file(url, str(target))
         record = {"nodeId": node, "url": url, "outputType": ext,
                   "path": dl.get("path"), "size": dl.get("size"),
@@ -539,6 +580,54 @@ def cmd_status(args) -> int:
     return 0
 
 
+def cmd_outputs(args) -> int:
+    """Batch protocol lines: every OUTPUT_FILE of one batch, aggregated fees."""
+    cfg = load_config()
+    store = Store(cfg.db_path)
+    if args.batch_id is not None:
+        batch_id = args.batch_id
+    elif getattr(args, "latest", False):
+        batch_id = store.latest_batch_id()
+    else:
+        print("outputs requires --latest or --batch-id", file=sys.stderr)
+        return 2
+    rows = store.list_batch(batch_id) if batch_id is not None else []
+    if not rows:
+        print(json.dumps({"error": "NOT_FOUND", "batchId": batch_id}))
+        return 1
+
+    tasks = [row_to_dict(r) for r in rows]
+    tally: dict[str, int] = {}
+    for t in tasks:
+        tally[t["status"]] = tally.get(t["status"], 0) + 1
+    header = " ".join(
+        f"{s}:{tally.get(s, 0)}"
+        for s in ("PENDING", "DISPATCHED", "SUCCESS", "FAILED", "SUBMIT_FAILED"))
+    print(f"BATCH:{batch_id} TOTAL:{len(tasks)} {header}")
+
+    coins = cost = third = 0
+    duration = 0
+    for t in tasks:
+        for dl in t.get("downloads_json") or []:
+            if dl.get("ok") and dl.get("path"):
+                print(f"OUTPUT_FILE:{dl['path']}")
+        if t["status"] in ("FAILED", "SUBMIT_FAILED") and t.get("error_message"):
+            print(f"ERROR:{t['id']}: {t['error_message']}")
+        coins += int(t.get("cost_coins") or 0)
+        cost += float(t.get("cost_money") or 0)
+        third += float(t.get("cost_third_party_money") or 0)
+        duration = max(duration, int(t.get("cost_time_s") or 0))
+    if coins:
+        print(f"COINS:{coins}")
+    if cost:
+        print(f"COST:{cost:.2f}")
+    if third:
+        print(f"THIRD_PARTY:{third:.2f}")
+    if duration:
+        print(f"DURATION:{duration}s")
+    return 0
+
+
 def _loads(value):
     if not value:
         return []
@@ -556,7 +645,11 @@ def build_parser() -> argparse.ArgumentParser:
     pe = sub.add_parser("enqueue", help="Add workflow job(s)")
     pe.add_argument("--type", help="Task type id from task-types.json")
     pe.add_argument("--param", action="append", help="name=value (repeatable)")
-    pe.add_argument("--output", help="Output dir for this job's downloads")
+    pe.add_argument("--output-dir", "--output", dest="output_dir",
+                    help="Output dir (single job, or default for --from-file jobs)")
+    pe.add_argument("--output-name", dest="output_name",
+                    help="Output basename without extension (with --output-dir; "
+                         "multiple results get _0/_1 suffixes)")
     pe.add_argument("--workflow-id")
     pe.add_argument("--node", action="append", help="nodeId:fieldName=value")
     pe.add_argument("--instance-type", choices=["default", "plus", "ultra"])
@@ -590,6 +683,11 @@ def build_parser() -> argparse.ArgumentParser:
                     help="single task only: print model-call-compatible "
                          "OUTPUT_FILE/COINS/COST/THIRD_PARTY/DURATION lines")
 
+    po = sub.add_parser("outputs", help="Batch delivery: protocol lines for one batch")
+    grp = po.add_mutually_exclusive_group(required=True)
+    grp.add_argument("--latest", action="store_true", help="highest batch id")
+    grp.add_argument("--batch-id", type=int)
+
     return p
 
 
@@ -601,6 +699,7 @@ def main(argv: list[str] | None = None) -> int:
         "reconcile": cmd_reconcile,
         "workflow": cmd_workflow,
         "status": cmd_status,
+        "outputs": cmd_outputs,
     }[args.command](args)
 
 

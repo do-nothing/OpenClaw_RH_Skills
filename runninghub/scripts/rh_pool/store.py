@@ -271,6 +271,20 @@ class Store:
                 ).fetchone()
         return None
 
+    def list_batch(self, batch_id: int) -> list[sqlite3.Row]:
+        """All tasks of one batch, oldest first (delivery order)."""
+        with self._db() as conn:
+            return list(conn.execute(
+                "SELECT * FROM tasks WHERE batch_id=? ORDER BY id ASC",
+                (batch_id,)).fetchall())
+
+    def latest_batch_id(self) -> int | None:
+        with self._db() as conn:
+            row = conn.execute(
+                "SELECT MAX(batch_id) AS b FROM tasks"
+            ).fetchone()
+        return int(row["b"]) if row["b"] is not None else None
+
     def list_tasks(self, status: str | None = None, limit: int = 100) -> list[sqlite3.Row]:
         with self._db() as conn:
             if status:
