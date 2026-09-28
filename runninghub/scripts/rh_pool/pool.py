@@ -217,7 +217,8 @@ def cmd_enqueue(args) -> int:
 
     # Mode selection is purely flag-driven (see module docstring). The openclaw
     # session key is an explicit plaintext argument, never an environment var.
-    ids = store.enqueue(resolved, session_key=args.openclaw_session_key)
+    ids, batch_id = store.enqueue(resolved,
+                                  session_key=args.openclaw_session_key)
 
     runner_failed = False
     if args.manual:
@@ -252,21 +253,24 @@ def cmd_enqueue(args) -> int:
         runner = {"mode": "watch", "watcher": watcher}
         runner_failed = watcher.get("action") == "failed"
 
-    print(json.dumps({"enqueued": len(ids), "poolIds": ids, **runner,
-                      "counts": store.count_status()}, ensure_ascii=False, indent=2))
+    print(json.dumps({"enqueued": len(ids), "poolIds": ids,
+                      "batchId": batch_id, **runner,
+                      "counts": store.count_status(batch_id)},
+                     ensure_ascii=False, indent=2))
     # Jobs are safely in the ledger regardless, but a runner setup failure must
     # be visible: non-zero exit so the caller reports it instead of assuming
     # the batch will be picked up.
     return 1 if runner_failed else 0
 
 
-def _dispatch_pending(store: Store, api_key: str, concurrency: int) -> dict:
-    active = store.get_active()
+def _dispatch_pending(store: Store, api_key: str, concurrency: int,
+                      batch_id: int) -> dict:
+    active = store.get_active(batch_id)
     free = max(0, concurrency - len(active))
     summary = {"dispatched": 0, "submit_failed": 0}
     if free == 0:
         return summary
-    for row in store.get_pending(free):
+    for row in store.get_pending(free, batch_id):
         payload: dict = {"apiKey": api_key, "workflowId": row["workflow_id"]}
         nodes = _loads(row["node_overrides"])
         if nodes:
@@ -311,18 +315,21 @@ def _download_outputs(store: Store, row, results: list[dict], cfg) -> list[dict]
     return downloads
 
 
-def _poll_active(store: Store, api_key: str) -> tuple[dict, list[tuple]]:
+def _poll_active(store: Store, api_key: str,
+                 batch_id: int | None = None) -> tuple[dict, list[tuple]]:
     """Poll every DISPATCHED task once and advance state only — no downloads.
 
     Downloading is deliberately deferred (see run_tick): a slow download must
     not delay refilling the concurrency slot the completed task just freed.
+    batch_id scopes polling to one batch; reconcile polls every active batch
+    (by the open-batch invariant that is at most one anyway).
 
     Returns (summary, succeeded), where succeeded is a list of
     (row, results) pairs awaiting download.
     """
     summary = {"succeeded": 0, "failed": 0, "pending": 0, "poll_errors": 0}
     succeeded: list[tuple] = []
-    for row in store.get_active():
+    for row in store.get_active(batch_id):
         result = query_task(api_key, row["rh_task_id"])
         if not result.get("ok"):
             # Poll/network problem only — do NOT terminalize, do NOT resubmit.
@@ -383,18 +390,31 @@ def run_tick(cfg, api_key: str) -> dict:
       4. download   fetch outputs; replacement jobs already run on RH meanwhile
     """
     store = Store(cfg.db_path)
-    dispatch1 = _dispatch_pending(store, api_key, cfg.concurrency)
-    poll, succeeded = _poll_active(store, api_key)
-    dispatch2 = _dispatch_pending(store, api_key, cfg.concurrency)
+    batch_id = store.current_batch_id()
+    if batch_id is None:
+        # Empty pool: nothing in flight and nothing queued.
+        return {
+            "currentBatchId": None,
+            "dispatched": {"dispatched": 0, "submit_failed": 0},
+            "polled": {"succeeded": 0, "failed": 0, "pending": 0,
+                       "poll_errors": 0, "downloaded": 0, "download_errors": 0},
+            "counts": store.count_status(),
+        }
+    # All work this tick belongs to the single open batch; a batch that opens
+    # concurrently (new enqueue during this tick) is picked up next tick.
+    dispatch1 = _dispatch_pending(store, api_key, cfg.concurrency, batch_id)
+    poll, succeeded = _poll_active(store, api_key, batch_id)
+    dispatch2 = _dispatch_pending(store, api_key, cfg.concurrency, batch_id)
     poll.update(_download_succeeded(store, succeeded, cfg))
     dispatch = {
         "dispatched": dispatch1["dispatched"] + dispatch2["dispatched"],
         "submit_failed": dispatch1["submit_failed"] + dispatch2["submit_failed"],
     }
     return {
+        "currentBatchId": batch_id,
         "dispatched": dispatch,
         "polled": poll,
-        "counts": store.count_status(),
+        "counts": store.count_status(batch_id),
     }
 
 
@@ -511,6 +531,7 @@ def cmd_status(args) -> int:
         return 2
     rows = store.list_tasks(status=args.status_filter, limit=args.limit)
     out = {
+        "currentBatchId": store.current_batch_id(),
         "counts": store.count_status(),
         "tasks": [row_to_dict(r) for r in rows],
     }

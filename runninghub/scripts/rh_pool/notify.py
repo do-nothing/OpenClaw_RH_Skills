@@ -333,15 +333,27 @@ def mode_run() -> int:
         summary = pool_mod.run_tick(cfg, api_key)
         counts = summary.get("counts") or {}
         outstanding = counts.get("outstanding", 1)
+        drained_batch = summary.get("currentBatchId")
 
-        if outstanding == 0:
-            # Pool drained: wake every distinct origin session, then stop polling.
-            sessions = store.distinct_session_keys()
+        if outstanding == 0 and drained_batch is not None:
+            # This batch drained: wake only its origin sessions, clear only its
+            # keys, then stop polling.
+            sessions = store.batch_session_keys(drained_batch)
             targets = sessions or [default_session_key()]
             for key in targets:
                 wake_session(key, WAKE_MESSAGE)
-            store.clear_session_keys()
+            store.clear_batch_session_keys(drained_batch)
             # "Issued the wake -> remove, regardless of success."
+            remove_polling_automation()
+            # Heal the drain/enqueue race: a new enqueue in this window opens a
+            # new batch and may have had its automation just removed; its kicked
+            # worker also exited on our held lock. Re-arm and kick for it.
+            if store.current_batch_id() is not None:
+                ensure_polling_automation()
+                kick_worker()
+        elif outstanding == 0:
+            # Tick found an already-empty pool (stray worker): clean up without
+            # waking anyone.
             remove_polling_automation()
         return 0
     except Exception as exc:  # noqa: BLE001
@@ -367,6 +379,7 @@ def mode_watch() -> int:
     try:
         from rh_pool import pool as pool_mod
         from rh_pool.config import load_config
+        from rh_pool.store import Store
         from runninghub import resolve_api_key
 
         cfg = load_config()
@@ -386,8 +399,14 @@ def mode_watch() -> int:
                 outstanding = counts.get("outstanding", 1)
                 log(f"watch tick outstanding={outstanding} counts={counts}")
                 if outstanding == 0:
-                    log("watch drained; exiting")
-                    return 0
+                    # Heal the drain/enqueue race: a new batch may have opened
+                    # after the tick's batch was captured; its kick skipped us
+                    # because the lock was held. Keep watching instead of exit.
+                    store = Store(cfg.db_path)
+                    if store.current_batch_id() is None:
+                        log("watch drained; exiting")
+                        return 0
+                    log("watch drained but a new batch is open; continuing")
             # Prove liveness: refresh the lock mtime before sleeping.
             try:
                 os.utime(_lock_path(), None)

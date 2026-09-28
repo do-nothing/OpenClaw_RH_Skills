@@ -14,6 +14,19 @@ not choose a mode in prose:**
 
 Script: `python3 {baseDir}/scripts/rh_pool/pool.py`
 
+## Batches (internal)
+
+Batches need no flag and are invisible in the enqueue interface: while any job
+is still outstanding (PENDING/DISPATCHED), every new enqueue **joins the open
+batch**; after the pool drains, the next enqueue opens a new one. So one batch
+= "everything submitted while the pool was busy". Batch state is derived from
+task rows (no open/close to break), survives crashes, and scopes the
+drain-time wake-up: only the drained batch's sessions are woken/cleared.
+
+- enqueue response and `status` report `batchId` / `currentBatchId`
+- `status` per task also shows `rh_status` — RunningHub's live remote status
+  (QUEUED → RUNNING → SUCCESS/FAILED), written on every poll
+
 ## When to use
 
 **Any workflow task goes here — a single one counts.** Do not look for a

@@ -1,10 +1,12 @@
 """SQLite-backed store for the RunningHub async workflow task pool.
 
-Scope: global pool, no project/batch grouping. Completion is a plain fact -
-`outstanding` drops to 0. The pool does not track "was it reported": the
-polling automation's own existence is that state (see rh_pool/notify.py).
+Batches are derived, not explicitly opened/closed: while any PENDING or
+DISPATCHED rows exist they all belong to the single *open* batch (the highest
+batch_id among those rows); once the pool drains, the next enqueue opens a new
+batch. This makes batch state crash-proof - nothing can be "left open".
 
-Task status:
+`rh_status` mirrors RunningHub's raw remote status (QUEUED/RUNNING/...) and is
+written on every poll, independently of the local lifecycle:
   PENDING        enqueued locally, not yet sent to RunningHub
   DISPATCHED     create succeeded, rh_task_id known (RH: QUEUED/RUNNING)
   SUCCESS        terminal
@@ -70,11 +72,13 @@ class Store:
 
                 CREATE TABLE IF NOT EXISTS tasks (
                     id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                    batch_id       INTEGER,         -- open batch at enqueue time
                     workflow_id    TEXT NOT NULL,
                     instance_type  TEXT NOT NULL DEFAULT 'default',
                     node_overrides TEXT,            -- JSON list
                     request_json   TEXT,            -- JSON, api key excluded
                     rh_task_id     TEXT,            -- set once DISPATCHED
+                    rh_status      TEXT,            -- raw remote QUEUED/RUNNING/...
                     status         TEXT NOT NULL DEFAULT 'PENDING',
                     submitted_at   INTEGER,         -- local create-to-RH (ms)
                     started_at     INTEGER,         -- first observed running (ms)
@@ -108,6 +112,12 @@ class Store:
             )
             self._set_meta(conn, "schema_version", str(SCHEMA_VERSION))
             self._migrate(conn)
+            # Introduced together with batch_id (created post-migration so it
+            # also works on pre-batch databases).
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_tasks_batch_status "
+                "ON tasks(batch_id, status)"
+            )
 
     @staticmethod
     def _migrate(conn: sqlite3.Connection) -> None:
@@ -120,10 +130,15 @@ class Store:
             "inputs_json": "ALTER TABLE tasks ADD COLUMN inputs_json TEXT",
             "downloads_json": "ALTER TABLE tasks ADD COLUMN downloads_json TEXT",
             "session_key": "ALTER TABLE tasks ADD COLUMN session_key TEXT",
+            "rh_status": "ALTER TABLE tasks ADD COLUMN rh_status TEXT",
         }
         for column, ddl in wanted.items():
             if column not in existing:
                 conn.execute(ddl)
+        if "batch_id" not in existing:
+            # Historical rows predate batches: collapse them into batch 1.
+            conn.execute("ALTER TABLE tasks ADD COLUMN batch_id INTEGER")
+            conn.execute("UPDATE tasks SET batch_id=1 WHERE batch_id IS NULL")
 
     # ------------------------------------------------------------------ meta
     @staticmethod
@@ -147,10 +162,16 @@ class Store:
 
     # --------------------------------------------------------------- enqueue
     def enqueue(self, jobs: Iterable[dict],
-                session_key: str | None = None) -> list[int]:
-        """Insert jobs as PENDING. Each job:
-        workflow_id, instance_type?, node_overrides?(list), request_json?(dict),
-        inputs?(list of uploaded-input records).
+                session_key: str | None = None) -> tuple[list[int], int]:
+        """Insert jobs as PENDING; return (poolIds, batchId).
+
+        Each job: workflow_id, instance_type?, node_overrides?(list),
+        request_json?(dict), inputs?(list of uploaded-input records).
+
+        Batch assignment, in one IMMEDIATE transaction: while an open batch
+        exists (any PENDING/DISPATCHED row), new jobs join it; otherwise a new
+        batch is allocated. The immediate write lock serializes concurrent
+        enqueues so two processes cannot each open a batch.
 
         session_key records the originating session so the drain can be
         reported back to it.
@@ -158,15 +179,29 @@ class Store:
         ts = now_ms()
         ids: list[int] = []
         with self._db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT MAX(batch_id) AS b FROM tasks "
+                "WHERE status IN ('PENDING','DISPATCHED')"
+            ).fetchone()
+            open_batch = row["b"]
+            if open_batch is not None:
+                batch_id = int(open_batch)
+            else:
+                nxt = conn.execute(
+                    "SELECT COALESCE(MAX(batch_id), 0) + 1 AS b FROM tasks"
+                ).fetchone()
+                batch_id = int(nxt["b"])
             for job in jobs:
                 cur = conn.execute(
                     """
-                    INSERT INTO tasks (workflow_id, instance_type, node_overrides,
-                                       request_json, inputs_json, session_key,
-                                       status, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, 'PENDING', ?)
+                    INSERT INTO tasks (batch_id, workflow_id, instance_type,
+                                       node_overrides, request_json, inputs_json,
+                                       session_key, status, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, 'PENDING', ?)
                     """,
                     (
+                        batch_id,
                         str(job["workflow_id"]),
                         str(job.get("instance_type") or "default"),
                         json.dumps(job.get("node_overrides") or [], ensure_ascii=False),
@@ -177,33 +212,50 @@ class Store:
                     ),
                 )
                 ids.append(int(cur.lastrowid))
-        return ids
+        return ids, batch_id
+
+    def current_batch_id(self) -> int | None:
+        """The open batch (has PENDING/DISPATCHED rows), or None when drained."""
+        with self._db() as conn:
+            row = conn.execute(
+                "SELECT MAX(batch_id) AS b FROM tasks "
+                "WHERE status IN ('PENDING','DISPATCHED')"
+            ).fetchone()
+        return int(row["b"]) if row["b"] is not None else None
 
     # ------------------------------------------------------------- retrieval
-    def get_pending(self, limit: int) -> list[sqlite3.Row]:
+    def get_pending(self, limit: int, batch_id: int | None = None) -> list[sqlite3.Row]:
         with self._db() as conn:
-            return list(
-                conn.execute(
+            if batch_id is None:
+                return list(conn.execute(
                     "SELECT * FROM tasks WHERE status='PENDING' "
-                    "ORDER BY id ASC LIMIT ?",
-                    (limit,),
-                ).fetchall()
-            )
+                    "ORDER BY id ASC LIMIT ?", (limit,)).fetchall())
+            return list(conn.execute(
+                "SELECT * FROM tasks WHERE status='PENDING' AND batch_id=? "
+                "ORDER BY id ASC LIMIT ?", (batch_id, limit)).fetchall())
 
-    def get_active(self) -> list[sqlite3.Row]:
-        """Dispatched, not terminal (need RH polling)."""
+    def get_active(self, batch_id: int | None = None) -> list[sqlite3.Row]:
+        """Dispatched, not terminal (need RH polling). Scoped to one batch when
+        batch_id is given; unscoped calls are only for reconcile."""
         with self._db() as conn:
-            return list(
-                conn.execute(
+            if batch_id is None:
+                return list(conn.execute(
                     "SELECT * FROM tasks WHERE status='DISPATCHED' ORDER BY id ASC"
-                ).fetchall()
-            )
+                ).fetchall())
+            return list(conn.execute(
+                "SELECT * FROM tasks WHERE status='DISPATCHED' AND batch_id=? "
+                "ORDER BY id ASC", (batch_id,)).fetchall())
 
-    def count_status(self) -> dict[str, int]:
+    def count_status(self, batch_id: int | None = None) -> dict[str, int]:
         with self._db() as conn:
-            rows = conn.execute(
-                "SELECT status, COUNT(*) c FROM tasks GROUP BY status"
-            ).fetchall()
+            if batch_id is None:
+                rows = conn.execute(
+                    "SELECT status, COUNT(*) c FROM tasks GROUP BY status"
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT status, COUNT(*) c FROM tasks WHERE batch_id=? "
+                    "GROUP BY status", (batch_id,)).fetchall()
         counts = {r["status"]: r["c"] for r in rows}
         counts["outstanding"] = sum(counts.get(s, 0) for s in OUTSTANDING_STATUSES)
         return counts
@@ -269,7 +321,8 @@ class Store:
         with self._db() as conn:
             if status == "SUCCESS":
                 conn.execute(
-                    """UPDATE tasks SET status='SUCCESS', results_json=?,
+                    """UPDATE tasks SET status='SUCCESS', rh_status='SUCCESS',
+                           results_json=?,
                            cost_money=COALESCE(?, cost_money),
                            cost_third_party_money=COALESCE(?, cost_third_party_money),
                            cost_coins=COALESCE(?, cost_coins),
@@ -281,22 +334,28 @@ class Store:
                 )
             elif status == "FAILED":
                 conn.execute(
-                    """UPDATE tasks SET status='FAILED', error_code=?, error_type=?,
+                    """UPDATE tasks SET status='FAILED', rh_status='FAILED',
+                           error_code=?, error_type=?,
                            error_message=?, cost_money=COALESCE(?, cost_money),
                            finished_at=COALESCE(finished_at, ?), updated_at=?
                        WHERE id=?""",
                     (error_code, error_type, error_message, cost_money, ts, ts, pool_id),
                 )
             else:
-                # Still pending on RH; record first observed RUNNING as started.
+                # Still pending on RH: persist the raw remote status every poll;
+                # record the first observed RUNNING as started.
                 if rh_status == "RUNNING":
                     conn.execute(
-                        """UPDATE tasks SET started_at=COALESCE(started_at, ?),
+                        """UPDATE tasks SET rh_status=?,
+                               started_at=COALESCE(started_at, ?),
                                updated_at=? WHERE id=?""",
-                        (ts, ts, pool_id),
+                        (rh_status, ts, ts, pool_id),
                     )
                 else:
-                    conn.execute("UPDATE tasks SET updated_at=? WHERE id=?", (ts, pool_id))
+                    conn.execute(
+                        "UPDATE tasks SET rh_status=?, updated_at=? WHERE id=?",
+                        (rh_status, ts, pool_id),
+                    )
 
     # ------------------------------------------------------- uploads / ledger
     def find_upload(self, local_path: str, size: int, mtime: int) -> str | None:
@@ -334,21 +393,22 @@ class Store:
                 "UPDATE tasks SET downloads_json=?, updated_at=? WHERE id=?",
                 (json.dumps(downloads, ensure_ascii=False), now_ms(), pool_id))
 
-    def distinct_session_keys(self) -> list[str]:
-        """Distinct originating sessions with finished work pending wake-back."""
+    def batch_session_keys(self, batch_id: int) -> list[str]:
+        """Distinct originating sessions of one (drained) batch."""
         with self._db() as conn:
             rows = conn.execute(
                 "SELECT DISTINCT session_key FROM tasks "
-                "WHERE session_key IS NOT NULL AND session_key != ''"
+                "WHERE batch_id=? AND session_key IS NOT NULL AND session_key != ''",
+                (batch_id,),
             ).fetchall()
         return [r["session_key"] for r in rows]
 
-    def clear_session_keys(self) -> None:
-        """Drop wake-back targets after a batch drain has been reported."""
+    def clear_batch_session_keys(self, batch_id: int) -> None:
+        """Drop wake-back targets of one reported batch; other batches untouched."""
         with self._db() as conn:
             conn.execute("UPDATE tasks SET session_key=NULL "
-                         "WHERE session_key IS NOT NULL")
-
+                         "WHERE batch_id=? AND session_key IS NOT NULL",
+                         (batch_id,))
 
 
 def row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
