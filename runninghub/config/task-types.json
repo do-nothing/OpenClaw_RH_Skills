@@ -413,6 +413,188 @@
         }
       ],
       "fixedOverrides": []
+    },
+    {
+      "typeId": "i2v-minimax-h3-first-frame",
+      "version": 1,
+      "displayName": "MiniMax H3 FL2VA 首帧参考生视频",
+      "description": "MiniMax H3 开源版：一张首帧图 + 画面/运镜指令生成带声音的短视频。时长限制 4–15 秒（默认 5 秒）。画幅由开关选择：1=1:1，2=3:4，3=4:3，4=9:16，5=16:9，6=跟随首帧。",
+      "workflowId": "2104781561072799745",
+      "instanceType": "plus",
+      "params": [
+        {
+          "name": "image",
+          "label": "首帧图片",
+          "type": "image",
+          "required": true,
+          "nodeId": "4",
+          "fieldName": "image",
+          "accept": [".jpg", ".jpeg", ".png", ".webp"]
+        },
+        {
+          "name": "prompt",
+          "label": "画面/运镜指令",
+          "type": "text",
+          "required": true,
+          "nodeId": "7",
+          "fieldName": "prompt"
+        },
+        {
+          "name": "durationSeconds",
+          "label": "时长（秒）",
+          "type": "int",
+          "required": false,
+          "default": 5,
+          "nodeId": "6",
+          "fieldName": "duration_seconds"
+        },
+        {
+          "name": "aspectSelect",
+          "label": "画幅开关 1:1=1 3:4=2 4:3=3 9:16=4 16:9=5 跟随首帧=6",
+          "type": "int",
+          "required": false,
+          "default": 3,
+          "nodeId": "24",
+          "fieldName": "select"
+        }
+      ],
+      "fixedOverrides": []
+    },
+    {
+      "typeId": "i2v-minimax-h3-multi-ref",
+      "version": 1,
+      "displayName": "MiniMax H3 多参考生视频",
+      "description": "MiniMax H3：结构化提示词 + 最多 9 张参考图（人物/场景/道具）生成带台词与音效的短视频。时长限制 4–15 秒（默认 10 秒，16:9）。未用图片槽以 None 清空，不带入发布图自带示例。参考视频/音频槽暂不开放，模型按提示词自动生成声音。",
+      "workflowId": "2104772802795630593",
+      "instanceType": "plus",
+      "params": [
+        {
+          "name": "prompt",
+          "label": "结构化提示词（含画面描述、台词<d>、声音设计）",
+          "type": "text",
+          "required": true,
+          "nodeId": "263",
+          "fieldName": "text"
+        },
+        {
+          "name": "image",
+          "label": "参考图 1（主参考）",
+          "type": "image",
+          "required": true,
+          "nodeId": "51",
+          "fieldName": "image",
+          "accept": [".jpg", ".jpeg", ".png", ".webp"]
+        },
+        {
+          "name": "image2",
+          "label": "参考图 2",
+          "type": "image",
+          "required": false,
+          "default": "None",
+          "nodeId": "49",
+          "fieldName": "image",
+          "accept": [".jpg", ".jpeg", ".png", ".webp"]
+        },
+        {
+          "name": "image3",
+          "label": "参考图 3",
+          "type": "image",
+          "required": false,
+          "default": "None",
+          "nodeId": "50",
+          "fieldName": "image",
+          "accept": [".jpg", ".jpeg", ".png", ".webp"]
+        },
+        {
+          "name": "image4",
+          "label": "参考图 4",
+          "type": "image",
+          "required": false,
+          "default": "None",
+          "nodeId": "43",
+          "fieldName": "image",
+          "accept": [".jpg", ".jpeg", ".png", ".webp"]
+        },
+        {
+          "name": "image5",
+          "label": "参考图 5",
+          "type": "image",
+          "required": false,
+          "default": "None",
+          "nodeId": "19",
+          "fieldName": "image",
+          "accept": [".jpg", ".jpeg", ".png", ".webp"]
+        },
+        {
+          "name": "image6",
+          "label": "参考图 6",
+          "type": "image",
+          "required": false,
+          "default": "None",
+          "nodeId": "23",
+          "fieldName": "image",
+          "accept": [".jpg", ".jpeg", ".png", ".webp"]
+        },
+        {
+          "name": "image7",
+          "label": "参考图 7",
+          "type": "image",
+          "required": false,
+          "default": "None",
+          "nodeId": "199",
+          "fieldName": "image",
+          "accept": [".jpg", ".jpeg", ".png", ".webp"]
+        },
+        {
+          "name": "image8",
+          "label": "参考图 8",
+          "type": "image",
+          "required": false,
+          "default": "None",
+          "nodeId": "200",
+          "fieldName": "image",
+          "accept": [".jpg", ".jpeg", ".png", ".webp"]
+        },
+        {
+          "name": "image9",
+          "label": "参考图 9",
+          "type": "image",
+          "required": false,
+          "default": "None",
+          "nodeId": "201",
+          "fieldName": "image",
+          "accept": [".jpg", ".jpeg", ".png", ".webp"]
+        },
+        {
+          "name": "durationSeconds",
+          "label": "时长（秒）",
+          "type": "float",
+          "required": false,
+          "default": 10,
+          "nodeId": "259",
+          "fieldName": "value"
+        },
+        {
+          "name": "aspectRatio",
+          "label": "画面比例",
+          "type": "enum",
+          "required": false,
+          "default": "16:9 (Widescreen)",
+          "enum": [
+            "1:1 (Square)",
+            "2:3 (Portrait Photo)",
+            "3:2 (Photo)",
+            "3:4 (Portrait Standard)",
+            "4:3 (Standard)",
+            "9:16 (Portrait Widescreen)",
+            "16:9 (Widescreen)",
+            "21:9 (Ultrawide)"
+          ],
+          "nodeId": "252",
+          "fieldName": "aspect_ratio"
+        }
+      ],
+      "fixedOverrides": []
     }
   ]
 }

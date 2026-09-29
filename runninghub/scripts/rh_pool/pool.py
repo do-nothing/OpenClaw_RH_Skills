@@ -150,12 +150,16 @@ def _resolve_job(job: dict, store: Store, api_key: str | None, cfg) -> dict:
             else:
                 continue
             if p.type in transfer.FILE_TYPES:
-                if isinstance(value, str) and not value.strip():
-                    # Explicit empty string: leave an optional media slot unset.
-                    # RunningHub treats "" on a LoadImage field as "no input"
-                    # (verified on RH_Nano_Banana2: null is rejected, "" empties
-                    # the slot — enables text-to-image and sparse multi-image).
-                    field_value = ""
+                stripped = value.strip() if isinstance(value, str) else value
+                if isinstance(stripped, str) and (not stripped or stripped == "None"):
+                    # Leave an optional media slot unset, using the published
+                    # graph's own empty marker: "" for LoadImage/VHS_LoadVideo
+                    # slots (null is rejected; "" enables text-to-image and
+                    # sparse multi-image), or the literal "None" that some
+                    # LoadImage/LoadAudio nodes ship as their empty value
+                    # (verified on the MiniMax H3 multi-ref export, whose
+                    # author uses "None" on every unused slot).
+                    field_value = stripped
                 else:
                     field_value = _resolve_file_param(
                         p, value, store, api_key, inputs)
