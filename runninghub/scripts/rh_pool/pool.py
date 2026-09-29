@@ -12,6 +12,7 @@ Commands:
             (refill slots freed this tick) -> download outputs.
   status    Query the ledger (counts / task detail).
   reconcile Re-poll all DISPATCHED tasks and sync state (after restart).
+  ls        Human-readable task table of one batch (default: latest).
 
 The pool is a pure executor + ledger: it answers "accept work" and "is it
 done". Both runners live in rh_pool/notify.py: Mode A is the scheduler-driven
@@ -24,6 +25,9 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
+import unicodedata
+from datetime import datetime
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -641,6 +645,140 @@ def _loads(value):
         return []
 
 
+# --------------------------------------------------------------- ls (human)
+def _disp_width(text: str) -> int:
+    """Terminal column width: CJK full/wide chars count as two columns."""
+    return sum(2 if unicodedata.east_asian_width(c) in ("W", "F") else 1
+               for c in text)
+
+
+def _pad(text: str, width: int) -> str:
+    return text + " " * max(0, width - _disp_width(text))
+
+
+def _clip(text: str, width: int) -> str:
+    if _disp_width(text) <= width:
+        return text
+    out = ""
+    for c in text:
+        if _disp_width(out + c) > width - 1:
+            break
+        out += c
+    return out + "…"
+
+
+def _fmt_dur(seconds: float) -> str:
+    seconds = int(seconds)
+    if seconds < 0:
+        seconds = 0
+    if seconds < 60:
+        return f"{seconds}s"
+    minutes, secs = divmod(seconds, 60)
+    if minutes < 60:
+        return f"{minutes}m{secs:02d}s"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}h{minutes:02d}m"
+
+
+def _fmt_ts(ts_ms: int, now: datetime) -> str:
+    dt = datetime.fromtimestamp(ts_ms / 1000)
+    return dt.strftime("%H:%M:%S") if dt.date() == now.date() else dt.strftime("%m-%d %H:%M")
+
+
+def cmd_ls(args) -> int:
+    """Human-readable task table for one batch (default: the latest batch)."""
+    cfg = load_config()
+    store = Store(cfg.db_path)
+    latest = store.latest_batch_id()
+    if args.batch_id is not None and args.batch is not None:
+        print("ls: use either a positional batch number or --batch-id, not both",
+              file=sys.stderr)
+        return 2
+    if args.batch_id is not None:
+        batch_id = args.batch_id
+    elif args.batch is not None:
+        if args.batch >= 0:
+            batch_id = args.batch          # absolute batch id
+        elif latest is None:
+            print("(no tasks yet)")
+            return 0
+        else:
+            batch_id = latest + args.batch  # -x -> latest-x
+        if batch_id < 1:
+            print(f"ls: batch {batch_id} does not exist (latest is {latest})",
+                  file=sys.stderr)
+            return 1
+    else:
+        batch_id = latest
+    if batch_id is None:
+        print("(no tasks yet)")
+        return 0
+    rows = store.list_batch(batch_id)
+    if not rows:
+        print(f"batch {batch_id}: no tasks", file=sys.stderr)
+        return 1
+
+    name_by_type = {t.typeId: t.displayName
+                    for t in workflow_def.load_task_types()}
+    now = datetime.now()
+    now_ms = int(time.time() * 1000)
+
+    table: list[list[str]] = []
+    outstanding = 0
+    for r in rows:
+        d = row_to_dict(r)
+        if d["status"] in ("PENDING", "DISPATCHED"):
+            outstanding += 1
+        req = d.get("request_json") or {}
+        type_id = req.get("type")
+        if type_id and type_id in name_by_type:
+            wf_name = name_by_type[type_id]
+        elif type_id:
+            wf_name = type_id
+        else:
+            wf_name = f"wf:{d['workflow_id']}"
+        wf_name = _clip(wf_name, 24)
+
+        sub = d.get("submitted_at")
+        if not sub:
+            submitted = "-"
+            duration = "-"
+        else:
+            submitted = _fmt_ts(sub, now)
+            end = d.get("finished_at") or now_ms
+            duration = _fmt_dur((end - sub) / 1000)
+            if not d.get("finished_at"):
+                duration += "…"  # still ticking
+
+        fee_parts: list[str] = []
+        if d.get("cost_coins"):
+            fee_parts.append(f"{int(d['cost_coins'])}币")
+        if d.get("cost_money"):
+            fee_parts.append(f"+{float(d['cost_money']):.2f}")
+        if d.get("cost_third_party_money"):
+            fee_parts.append(f"+三方{float(d['cost_third_party_money']):.2f}")
+
+        table.append([
+            str(d["id"]),
+            wf_name,
+            d.get("instance_type") or "-",
+            submitted,
+            duration,
+            d.get("rh_status") or d["status"],
+            "".join(fee_parts) or "-",
+        ])
+
+    print(f"batch {batch_id} — {len(table)} task(s), outstanding: {outstanding}")
+    headers = ["ID", "workflow_name", "instance", "发起时间", "时长", "rh_status", "费用"]
+    grid = [headers] + table
+    widths = [max(_disp_width(row[i]) for row in grid) for i in range(len(headers))]
+    for idx, row in enumerate(grid):
+        print("  ".join(_pad(cell, widths[i]) for i, cell in enumerate(row)).rstrip())
+        if idx == 0:
+            print("  ".join("-" * widths[i] for i in range(len(headers))))
+    return 0
+
+
 # ----------------------------------------------------------------------- CLI
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="RunningHub async workflow task pool")
@@ -692,6 +830,12 @@ def build_parser() -> argparse.ArgumentParser:
     grp.add_argument("--latest", action="store_true", help="highest batch id")
     grp.add_argument("--batch-id", type=int)
 
+    pl = sub.add_parser("ls", help="Human-readable task table (default: latest batch)")
+    pl.add_argument("batch", nargs="?", type=int, metavar="N",
+                    help="batch id (e.g. 10), or a negative offset from the "
+                         "latest batch (e.g. -1 = the previous batch)")
+    pl.add_argument("--batch-id", type=int, help="absolute batch id (same as a positive N)")
+
     return p
 
 
@@ -704,6 +848,7 @@ def main(argv: list[str] | None = None) -> int:
         "workflow": cmd_workflow,
         "status": cmd_status,
         "outputs": cmd_outputs,
+        "ls": cmd_ls,
     }[args.command](args)
 
 

@@ -184,11 +184,20 @@ in normal user-facing operation.
 ## Check progress
 
 ```bash
+python3 {baseDir}/scripts/rh_pool/pool.py ls                    # latest batch as a human-readable table
+python3 {baseDir}/scripts/rh_pool/pool.py ls 10                 # batch 10 (a positive number = absolute id)
+python3 {baseDir}/scripts/rh_pool/pool.py ls -1                 # latest-1 (a negative number = offset back)
+python3 {baseDir}/scripts/rh_pool/pool.py ls --batch-id 10      # same as `ls 10`
 python3 {baseDir}/scripts/rh_pool/pool.py status              # currentBatchId + counts + recent tasks
 python3 {baseDir}/scripts/rh_pool/pool.py status --pool-id 7  # one task, incl. rh_status/downloads
 python3 {baseDir}/scripts/rh_pool/pool.py outputs --latest    # one batch: all files + aggregated fees
+python3 {baseDir}/scripts/rh_pool/pool.py outputs --batch-id 10  # same, for a specific batch
 python3 {baseDir}/scripts/rh_pool/pool.py reconcile           # resync + download after a restart (no dispatch)
 ```
+
+`ls` shows one row per task (id, workflow display name, instance, submit
+time, wall duration, `rh_status`, fees); a trailing `…` on the duration marks
+tasks still running, and the header reports the outstanding count.
 
 Statuses: `PENDING` → `DISPATCHED` → `SUCCESS` / `FAILED` / `SUBMIT_FAILED`.
 `outstanding` is how much is still running; `currentBatchId` is null once the

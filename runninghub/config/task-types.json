@@ -464,7 +464,7 @@
       "typeId": "i2v-minimax-h3-multi-ref",
       "version": 1,
       "displayName": "MiniMax H3 多参考生视频",
-      "description": "MiniMax H3：结构化提示词 + 最多 9 张参考图（人物/场景/道具）生成带台词与音效的短视频。时长限制 4–15 秒（默认 10 秒，16:9）。未用图片槽以 None 清空，不带入发布图自带示例。参考视频/音频槽暂不开放，模型按提示词自动生成声音。",
+      "description": "MiniMax H3：结构化提示词 + 最多 9 张参考图（人物/场景/道具）+ 最多 3 段参考视频（动作/运镜迁移、续写、编辑源；换主体时不要挂源视频）+ 最多 3 段参考音频（音色参考或整轨旁白/音效复用，由提示词指定）生成带台词与音效的短视频。时长限制 4–15 秒（默认 10 秒，16:9）。未用图片/音频槽以 None、视频槽以空串清空，不带入发布图自带示例。",
       "workflowId": "2104772802795630593",
       "instanceType": "plus",
       "params": [
@@ -564,6 +564,66 @@
           "nodeId": "201",
           "fieldName": "image",
           "accept": [".jpg", ".jpeg", ".png", ".webp"]
+        },
+        {
+          "name": "audio",
+          "label": "参考音频 1（音色参考/旁白复用）",
+          "type": "audio",
+          "required": false,
+          "default": "None",
+          "nodeId": "48",
+          "fieldName": "audio",
+          "accept": [".wav", ".mp3", ".m4a", ".aac", ".flac", ".ogg"]
+        },
+        {
+          "name": "audio2",
+          "label": "参考音频 2",
+          "type": "audio",
+          "required": false,
+          "default": "None",
+          "nodeId": "14",
+          "fieldName": "audio",
+          "accept": [".wav", ".mp3", ".m4a", ".aac", ".flac", ".ogg"]
+        },
+        {
+          "name": "audio3",
+          "label": "参考音频 3",
+          "type": "audio",
+          "required": false,
+          "default": "None",
+          "nodeId": "15",
+          "fieldName": "audio",
+          "accept": [".wav", ".mp3", ".m4a", ".aac", ".flac", ".ogg"]
+        },
+        {
+          "name": "video",
+          "label": "参考视频 1（动作/运镜迁移、续写、编辑源）",
+          "type": "video",
+          "required": false,
+          "default": "",
+          "nodeId": "27",
+          "fieldName": "video",
+          "accept": [".mp4", ".mov", ".webm", ".mkv", ".avi"]
+        },
+        {
+          "name": "video2",
+          "label": "参考视频 2",
+          "type": "video",
+          "required": false,
+          "default": "",
+          "nodeId": "25",
+          "fieldName": "video",
+          "accept": [".mp4", ".mov", ".webm", ".mkv", ".avi"]
+        },
+        {
+          "name": "video3",
+          "label": "参考视频 3",
+          "type": "video",
+          "required": false,
+          "default": "",
+          "nodeId": "26",
+          "fieldName": "video",
+          "accept": [".mp4", ".mov", ".webm", ".mkv", ".avi"]
         },
         {
           "name": "durationSeconds",
