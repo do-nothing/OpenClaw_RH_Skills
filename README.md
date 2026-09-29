@@ -172,7 +172,7 @@ SQLite 账本持久化（重启后 `reconcile` 断点续传）。单个任务也
 | **提交单个** | `pool.py enqueue --type image-gen-qwen --param prompt="..."` | 自动启动后台 watcher |
 | **批量提交** | `pool.py enqueue --from-file jobs.json` | JSON 任务列表，一次提交 |
 | **查看批次** | `pool.py ls` / `ls 10` / `ls -1` | 最新批次/指定批次/倒数第 N 批（人类可读表格） |
-| **总览状态** | `pool.py status` | 当前批次、计数、近期任务 |
+| **总览状态** | `pool.py status` | 当前批次、计数、最近 10 条任务（`--all` 全量） |
 | **单任务详情** | `pool.py status --pool-id 7` | rh_status、下载产物、费用明细 |
 | **批次产物** | `pool.py outputs --latest` / `--batch-id 10` | 产物路径 + 聚合费用 |
 | **重启恢复** | `pool.py reconcile` | 重新同步状态并下载已完成产物 |

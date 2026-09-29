@@ -174,7 +174,7 @@ Ref2VA prompt format — full template and verified tips in
 | **Submit one** | `pool.py enqueue --type image-gen-qwen --param prompt="..."` | Auto-starts background watcher |
 | **Submit batch** | `pool.py enqueue --from-file jobs.json` | JSON list of jobs in one call |
 | **View batch** | `pool.py ls` / `ls 10` / `ls -1` | Latest / absolute id / N batches back (human table) |
-| **Overview** | `pool.py status` | Current batch, counts, recent tasks |
+| **Overview** | `pool.py status` | Current batch, counts, 10 newest tasks (`--all` for everything) |
 | **One task** | `pool.py status --pool-id 7` | rh_status, downloads, fees |
 | **Batch outputs** | `pool.py outputs --latest` / `--batch-id 10` | Output paths + aggregated fees |
 | **Restart recovery** | `pool.py reconcile` | Re-sync states and download finished outputs |

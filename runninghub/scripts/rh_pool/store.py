@@ -285,16 +285,20 @@ class Store:
             ).fetchone()
         return int(row["b"]) if row["b"] is not None else None
 
-    def list_tasks(self, status: str | None = None, limit: int = 100) -> list[sqlite3.Row]:
+    def list_tasks(self, status: str | None = None,
+                   limit: int | None = 10) -> list[sqlite3.Row]:
+        """Newest-first; limit=None returns every row."""
+        sql = "SELECT * FROM tasks"
+        params: tuple = ()
+        if status:
+            sql += " WHERE status=?"
+            params = (status,)
+        sql += " ORDER BY id DESC"
+        if limit is not None:
+            sql += " LIMIT ?"
+            params = (*params, limit)
         with self._db() as conn:
-            if status:
-                return list(conn.execute(
-                    "SELECT * FROM tasks WHERE status=? ORDER BY id DESC LIMIT ?",
-                    (status, limit),
-                ).fetchall())
-            return list(conn.execute(
-                "SELECT * FROM tasks ORDER BY id DESC LIMIT ?", (limit,)
-            ).fetchall())
+            return list(conn.execute(sql, params).fetchall())
 
     # ----------------------------------------------------------- transitions
     def mark_dispatched(self, pool_id: int, rh_task_id: str) -> None:

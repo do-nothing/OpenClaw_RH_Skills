@@ -578,7 +578,10 @@ def cmd_status(args) -> int:
     if getattr(args, "lines", False):
         print("--lines requires --pool-id or --rh-task-id", file=sys.stderr)
         return 2
-    rows = store.list_tasks(status=args.status_filter, limit=args.limit)
+    rows = store.list_tasks(
+        status=args.status_filter,
+        limit=None if getattr(args, "all", False) else args.limit,
+    )
     out = {
         "currentBatchId": store.current_batch_id(),
         "counts": store.count_status(),
@@ -820,7 +823,10 @@ def build_parser() -> argparse.ArgumentParser:
     ps.add_argument("--pool-id", type=int)
     ps.add_argument("--rh-task-id")
     ps.add_argument("--status-filter")
-    ps.add_argument("--limit", type=int, default=50)
+    ps.add_argument("--limit", type=int, default=10,
+                    help="recent tasks to include (default 10, newest first)")
+    ps.add_argument("--all", action="store_true",
+                    help="include every task in the ledger, not just recent ones")
     ps.add_argument("--lines", action="store_true",
                     help="single task only: print model-call-compatible "
                          "OUTPUT_FILE/COINS/COST/THIRD_PARTY/DURATION lines")
