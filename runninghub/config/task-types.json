@@ -5,7 +5,7 @@
       "typeId": "voice-clone-emo",
       "version": 1,
       "displayName": "IndexTTS2 音色克隆（带语气）",
-      "description": "IndexTTS2：用主参考音频克隆音色，并可选提供情绪参考音频复刻说话语气；不传情绪音频时使用工作流默认音频。",
+      "description": "输入要朗读的文字和一段参考人声（几秒以上、尽量干净无背景音），生成用该音色说话的音频。还可以再给一段带情绪的人声，让朗读带上同样的语气（开心、温柔、激动等）；情绪音频留空时使用工作流自带的默认语气。",
       "workflowId": "2103675587473788929",
       "instanceType": "default",
       "params": [
@@ -19,7 +19,7 @@
         },
         {
           "name": "referenceAudio",
-          "label": "参考声音",
+          "label": "参考人声（音色来源）",
           "type": "audio",
           "required": true,
           "nodeId": "13",
@@ -42,7 +42,7 @@
       "typeId": "digital-human",
       "version": 1,
       "displayName": "数字人生成",
-      "description": "Wan MultiTalk：人物照片 + 配音音频 + 文案，生成口播数字人。",
+      "description": "一张人物正面照 + 一段参考人声（只提取音色，不需要是成品配音）+ 要播报的文案：先用参考音色把文案合成为语音，再驱动照片里的人物对口型说话，生成口播数字人视频。",
       "workflowId": "1968591880252469250",
       "instanceType": "default",
       "params": [
@@ -57,7 +57,7 @@
         },
         {
           "name": "audio",
-          "label": "配音音频",
+          "label": "参考人声（只取音色）",
           "type": "audio",
           "required": true,
           "nodeId": "204",
@@ -66,7 +66,7 @@
         },
         {
           "name": "text",
-          "label": "语音文字",
+          "label": "播报文案",
           "type": "text",
           "required": true,
           "nodeId": "205",
@@ -79,7 +79,7 @@
       "typeId": "music-minimax",
       "version": 1,
       "displayName": "MiniMax Music 3 文生音频",
-      "description": "MiniMax Music 3：根据音乐风格描述与歌词生成歌曲，歌词留空生成纯音乐。",
+      "description": "输入音乐风格描述（如“轻柔民谣，木吉他，女声”）生成一首完整歌曲；在歌词里写好演唱内容（可用 [verse]/[chorus] 等分段标记），歌词留空则生成纯音乐。",
       "workflowId": "2103357697491038209",
       "instanceType": "default",
       "params": [
@@ -107,7 +107,7 @@
       "typeId": "image-edit-banana2",
       "version": 2,
       "displayName": "全能图片（文生图 / 多图编辑，Nano Banana 2）",
-      "description": "Nano Banana 2 / Gemini 3.1 Flash：不传任何图片为文生图；传 1 张为图片编辑；最多传 10 张做多图参考/融合。未用图片槽固定下发空串，保持无输入。",
+      "description": "Nano Banana 2（Gemini 3.1 Flash）全能图片编辑：不给图片=按文字生图；给 1 张=按指令改图；给 2～10 张=多图参考与融合（把不同图里的人物、服装、道具合成到一张画面）。费用提醒：本类型除 RH 算力币外还收第三方接口费（仅现金，实测约 ¥0.19/张）；纯文生图和常规改图请优先用不收现金的 Qwen Image 2.1 系列，需要 7 张以上多图融合或 Qwen 效果不达标时再用它。",
       "workflowId": "2104426549608017921",
       "instanceType": "default",
       "params": [
@@ -235,8 +235,8 @@
     {
       "typeId": "image-gen-qwen",
       "version": 1,
-      "displayName": "Qwen Image 2.1 文生图大合集",
-      "description": "Qwen Image 2.1：文字描述生成图片，内置提示词自动扩展（LTX2）。画面比例可选，默认 16:9。",
+      "displayName": "Qwen Image 2.1 文生图",
+      "description": "Qwen Image 2.1：用文字描述生成图片，提交时会自动把简短描述扩写为详细提示词，一句话也能出图。只扣 RH 算力币、不收第三方现金费，是文生图的首选。画面比例可选，默认 16:9。",
       "workflowId": "2104415722230345730",
       "instanceType": "default",
       "params": [
@@ -274,7 +274,7 @@
       "typeId": "image-edit-qwen",
       "version": 1,
       "displayName": "Qwen Image 2.1 单图编辑",
-      "description": "Qwen Image 2.1：1 张参考图 + 编辑指令生成图片，内置提示词自动扩展。画面比例可选，默认 16:9。",
+      "description": "Qwen Image 2.1：给 1 张图和编辑指令（如“换成海边背景”“去掉路人”），生成改好的图。只扣 RH 算力币、不收第三方现金费，是单图编辑的首选。画面比例可选，默认 16:9。",
       "workflowId": "2104493095424454658",
       "instanceType": "default",
       "params": [
@@ -321,7 +321,7 @@
       "typeId": "image-edit-qwen-multi",
       "version": 1,
       "displayName": "Qwen Image 2.1 多图编辑",
-      "description": "Qwen Image 2.1：主图 + 最多 5 张参考图 + 编辑指令（如换装/换配饰/参考姿势）。未用图片槽留空即可，支持 2～6 张按需传入（空串掐断已实测）。默认 16:9。",
+      "description": "Qwen Image 2.1：1 张主图（要被修改的图）+ 最多 5 张参考图（提供要换上的服装、配饰、姿势、长相元素等）+ 编辑指令，按需传 2～6 张图，多余图槽留空即可。典型用途：换装、换配饰、参考姿势合成。只扣 RH 算力币、不收第三方现金费；需要 7～10 张图融合时才用 Nano Banana 2。默认 16:9。",
       "workflowId": "2104493103100026881",
       "instanceType": "default",
       "params": [
@@ -417,8 +417,8 @@
     {
       "typeId": "i2v-minimax-h3-first-frame",
       "version": 1,
-      "displayName": "MiniMax H3 FL2VA 首帧参考生视频",
-      "description": "MiniMax H3 开源版：一张首帧图 + 画面/运镜指令生成带声音的短视频。时长限制 4–15 秒（默认 5 秒）。画幅由开关选择：1=1:1，2=3:4，3=4:3，4=9:16，5=16:9，6=跟随首帧。",
+      "displayName": "MiniMax H3 首帧生视频",
+      "description": "一张起始画面图 + 画面/运镜描述，生成带原生音效的短视频，这张图就是视频第一帧。适合“让一张图动起来”的简单需求；多角色、动作/运镜迁移、视频续写或参考音色配音请改用“多参考生视频”。时长 4–15 秒（默认 5 秒），画幅可选：1=1:1，2=3:4，3=4:3，4=9:16，5=16:9，6=跟随首帧。",
       "workflowId": "2104781561072799745",
       "instanceType": "plus",
       "params": [
@@ -450,7 +450,7 @@
         },
         {
           "name": "aspectSelect",
-          "label": "画幅开关 1:1=1 3:4=2 4:3=3 9:16=4 16:9=5 跟随首帧=6",
+          "label": "画幅（1=1:1 2=3:4 3=4:3 4=9:16 5=16:9 6=跟随首帧）",
           "type": "int",
           "required": false,
           "default": 3,
@@ -464,13 +464,13 @@
       "typeId": "i2v-minimax-h3-multi-ref",
       "version": 1,
       "displayName": "MiniMax H3 多参考生视频",
-      "description": "MiniMax H3：结构化提示词 + 最多 9 张参考图（人物/场景/道具）+ 最多 3 段参考视频（动作/运镜迁移、续写、编辑源；换主体时不要挂源视频）+ 最多 3 段参考音频（音色参考或整轨旁白/音效复用，由提示词指定）生成带台词与音效的短视频。时长限制 4–15 秒（默认 10 秒，16:9）。未用图片/音频槽以 None、视频槽以空串清空，不带入发布图自带示例。",
+      "description": "高级参考生视频：最多 9 张参考图 + 3 段参考视频 + 3 段参考音频，配合六段式提示词，生成带台词和音效的短视频。典型玩法：①多图锁定角色长相与场景；②用一段视频做动作/运镜迁移（图片定“谁来演”，视频定“演什么动作”）或续写已有视频；③给一段人声用其音色念新台词，或整轨复用旁白/音效。重要：要把某段视频里的主角换成别的主体时，不要挂那段源视频（主体身份会被源视频锚定），只给目标主体的图片即可。提示词必须按 references/task-pool.md 的“MiniMax H3 多参考提示词”小节写。时长 4–15 秒（默认 10 秒，16:9），plus 实例，费用明显高于“首帧生视频”。",
       "workflowId": "2104772802795630593",
       "instanceType": "plus",
       "params": [
         {
           "name": "prompt",
-          "label": "结构化提示词（含画面描述、台词<d>、声音设计）",
+          "label": "六段式提示词（写法见 references/task-pool.md）",
           "type": "text",
           "required": true,
           "nodeId": "263",

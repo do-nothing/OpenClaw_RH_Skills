@@ -29,16 +29,20 @@ drain-time wake-up: only the drained batch's sessions are woken/cleared.
 
 ## When to use
 
-**Any workflow task goes here — a single one counts.** Do not look for a
-standard-API endpoint for 语音克隆 / 数字人 / 文生图 workflows.
+**Any workflow task goes here — a single one counts.** The shipped workflow
+catalog covers image generation/editing, voice cloning, digital human, music
+and MiniMax H3 video (full list and choice guide:
+[Task catalog](#task-catalog-and-which-to-choose) below).
 
-- User asks for a **workflow type** (语音克隆 / 数字人 / 文生图, any single job)
+- User asks for a **catalog workflow type** (any single job, even one image)
 - User wants **several generations** at once ("跑 3 个", "批量", "都生成一遍")
 - A task is **slow** and the user keeps chatting (video / digital human / 3D / music)
 - User asks for **progress** on submitted work
 
-The standard-API single-task flow in `SKILL.md` is only for endpoints that are
-not pool workflow types.
+For ordinary interactive single-shot image/video generation through
+RunningHub's standard API, use the menus in `references/image-models.md` /
+`references/video-models.md` instead. The boundary is about the delivery
+channel (async workflow vs synchronous standard endpoint), not quality.
 
 ## Task types
 
@@ -53,6 +57,88 @@ python3 {baseDir}/scripts/rh_pool/pool.py workflow validate
 
 A type's file params accept **a local path** (uploaded automatically, cached),
 an `api/...` id, or a URL.
+
+## Task catalog and which to choose
+
+Nine shipped types (run `pool.py workflow list` for live labels/params).
+"实测费用" comes from this skill's own task ledger and is an order-of-magnitude
+reference only — RunningHub pricing changes; check the `COINS:`/`THIRD_PARTY:`
+lines of `outputs` for real charges.
+
+| typeId | 输入 → 输出 | 实测费用参考 |
+|---|---|---|
+| `image-gen-qwen` | 文字 → 图片（提示词自动扩写） | 约 19 RH 币，**零现金** |
+| `image-edit-qwen` | 1 张图 + 指令 → 改好的图 | 约 23 RH 币，**零现金** |
+| `image-edit-qwen-multi` | 主图 + 1～5 张参考图 + 指令 → 合成图（换装/姿势/配饰） | 约 25 RH 币，**零现金** |
+| `image-edit-banana2` | 0 图文生图 / 1 张改图 / 2～10 张多图融合 | 1 RH 币 **+ 约 ¥0.19/张第三方现金** |
+| `i2v-minimax-h3-first-frame` | 1 张首帧图 + 描述 → 有声短视频 | 约 81 RH 币 |
+| `i2v-minimax-h3-multi-ref` | 最多 9 图 + 3 视频 + 3 音频 + 六段式提示词 → 有声短视频 | 约 100～350 RH 币（挂视频更贵） |
+| `voice-clone-emo` | 文案 + 参考人声（+可选情绪音频）→ 克隆音色语音 | RH 币，零现金 |
+| `digital-human` | 人物照 + 参考人声 + 播报文案 → 对口型口播视频 | 约 60 RH 币 |
+| `music-minimax` | 风格描述 + 歌词（可空）→ 完整歌曲/纯音乐 | 约 34 RH 币 |
+
+### Overlap rules (recommendations)
+
+1. **生图默认走 Qwen Image 2.1，不走 Nano Banana 2。** Qwen 三个类型只扣
+   RH 币；banana2 另收第三方现金（约 ¥0.19/张）。仅在以下情况用 banana2：
+   - 需要 **7～10 张图**融合（Qwen 多图编辑上限 6 张）；
+   - Qwen 效果不达标，用户接受现金费用。
+2. **图片编辑按参考图数量选型**：0 张→`image-gen-qwen`；1 张→`image-edit-qwen`；
+   2～6 张→`image-edit-qwen-multi`；7～10 张→`image-edit-banana2`。
+3. **H3 视频按复杂度选型**：只想"让这张图动起来"→`h3-first-frame`（便宜）；
+   需要多角色一致、动作/运镜迁移、续写、参考音色配音→`h3-multi-ref`。
+4. **换主体不要挂源视频**（实测结论）：想把视频 A 里的主角换成 B，挂 A 到
+   视频槽时 B 的身份会被 A 锚定（`[video editing]` 和 `weak_reference` 两种
+   写法都试过，成片仍是原主角）。正确做法是**只挂 B 的图片**走纯图参考；
+   若还要复刻 A 的动作，见下方动作迁移写法，并把场景整体换掉。
+5. **配音选型**：只要"用某人的声音念一段文案"→`voice-clone-emo`（出音频）；
+   要"照片人物开口口播"→`digital-human`（出视频，内部自带语音合成，音频
+   参数是音色参考而非成品配音）；视频需要旁白→用 H3 multi-ref 的音频槽。
+6. **标准 API 菜单与工作流的边界**：`references/image-models.md` /
+   `video-models.md` 里的标准端点是同步单次调用，适合交互性出图/出片；任务池
+   是异步 ComfyUI 工作流，适合批量、长任务和本表的特定高级能力。
+
+## MiniMax H3 multi-ref prompt guide
+
+`i2v-minimax-h3-multi-ref` 的 prompt 不是自由描述，必须按 MiniMax 官方
+Ref2VA 指南的**六段式**写（英文写效果最好，台词可用中文）。骨架：
+
+```text
+[<mode tags>]
+
+Subject definitions:
+- <Subject 1>: <Picture 1> — relationship: fully_preserved/attribute_transfer/...
+- <Subject 2>: <Video 1> — relationship: fully_preserved/weak_reference/...
+- <Subject 3>: <Audio 1> — relationship: fully_copy/timbre_reference/...
+
+Summary: 一句话说清成片是什么。
+
+Retention analysis: 每个参考素材保留什么、丢弃什么、改了什么。
+
+Detailed description: 分镜头时间线；台词写成独立行  <d>中文台词</d>
+
+Overall soundscape: 环境声/音效；旁白引用 <Audio 1>。
+
+Non-diegetic music: （可选）背景音乐。
+```
+
+已实测验证的写法：
+
+- **多图锁定主体/场景**：`[reference generation]`，每张图给 relationship
+  （`fully_preserved` = 身份/外观必须保留；`attribute_transfer` = 只借风格
+  属性）。不用的槽全部留空，池会清空发布图自带示例。
+- **动作/运镜迁移**（视频槽的核心价值）：图片标 `fully_preserved` 定"谁来
+  演"；视频写成 *motion reference: weak_reference, do not copy its identity
+  or background, only the exact action timeline*，并在 prompt 里把场景整体
+  换成新环境（实测：狗图 + 猫视频动作 + 换成秋日庭院 → 金毛在草地上逐拍
+  演出猫的动作，无猫元素泄漏）。
+- **视频续写**：`[video continuation + keyframe completion]`，图片槽放源片
+  **末帧**（本地 ffmpeg 抽取），视频槽放源片并标 `fully_preserved`，新动作
+  保持低幅度、无时间跳跃。
+- **音频两种用法**：①音色参考——给人声，prompt 里写新的 `<d>` 台词，模型
+  用该音色念新词；②整轨复用——`<Audio 1>: fully_copy`，旁白/音效时间轴
+  1:1 复刻（4 次实测开口时间误差 ≤6ms），此时 `durationSeconds` 对齐原片。
+- m4a / mp4 均可直传，无需先转码。
 
 ## Output locations and names
 

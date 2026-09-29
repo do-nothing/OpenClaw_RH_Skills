@@ -74,3 +74,17 @@ Always write prompts in **English** for best model results, even if the user spe
 If the user wants **AI-powered image editing** (e.g. "把背景换成海边", "去掉这个人", "加个帽子"):
 - Use `alibaba/qwen-image-2.0-pro/image-edit` directly — no model menu needed for this case.
 - This is a different capability from the image generation models above.
+
+## Workflow path (task pool) — when to switch
+
+The menu above is the synchronous standard API. Switch to the async workflow
+pool (`references/task-pool.md`) when the user asks for:
+- **batch** generation ("批量出 10 张", "都跑一遍") or wants work to continue in the background;
+- **multi-image fusion with 2+ reference photos** (换装/换姿势/道具合成, up to 10 images) — the
+  workflow catalog has `image-edit-qwen-multi` (2–6 images, coins only) and
+  `image-edit-banana2` (up to 10 images, extra ~¥0.19/张 cash);
+- a named workflow ("Qwen Image 2.1 工作流", "Nano Banana 2 工作流").
+
+Cost note for recommendations: the Qwen 2.1 workflow types charge RH coins only;
+the Nano Banana 2 workflow additionally charges third-party cash — prefer Qwen
+unless 7–10 images are required or its quality is insufficient.

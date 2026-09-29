@@ -109,3 +109,23 @@ If a video model fails (overloaded, timeout, error), do NOT just give up. Tell t
 > "哎呀，这个模型那边服务器忙不过来了～ 要不要我换 🚀全能视频V3.1 Fast 帮你重新生成？一般不会失败的！"
 
 If the user agrees (or says "好"/"换一个"/"试试"), immediately retry with the suggested model. Default fallback order: 全能视频V3.1 Fast → 可灵 → MiniMax H3.
+
+## Workflow path (task pool) — when to switch
+
+Menu choice 6 (MiniMax H3) is the synchronous standard endpoint: one image +
+prompt → short video. For H3's advanced multi-reference capabilities, route to
+the async workflow pool (`references/task-pool.md`, type
+`i2v-minimax-h3-multi-ref`):
+
+- **multiple reference images** keeping character/prop/scene consistency (up to 9);
+- **reference video for motion/camera transfer** ("让 A 做视频 B 里的整套动作"),
+  **video continuation** (续写已有视频), or video-editing workflows;
+- **reference audio**: narrate new lines in a cloned voice, or reuse the whole
+  original soundtrack;
+- batch / background runs.
+
+Its prompt must follow the six-section Ref2VA format described in
+`task-pool.md` — do not send a free-form prompt to that type. Note: replacing a
+source video's main subject works best WITHOUT attaching the source video
+(image-only identity anchor) — details and the verified motion-transfer pattern
+are in that file.
