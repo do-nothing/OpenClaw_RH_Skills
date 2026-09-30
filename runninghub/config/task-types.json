@@ -468,6 +468,61 @@
       "fixedOverrides": []
     },
     {
+      "typeId": "i2v-minimax-h3-first-last-frame",
+      "version": 1,
+      "displayName": "MiniMax H3 首尾帧生视频",
+      "description": "首帧图 + 尾帧图 + 分段提示词 → 从首帧自然过渡到尾帧、带音效的短视频（4–15 秒，默认 5 秒）。尾帧必填，置空会渲染失败；仅需首帧请用「MiniMax H3 首帧生视频」。建议两帧同主体同构图、仅姿态变化。画幅 1=1:1，2=3:4，3=4:3，4=9:16，5=16:9，6=跟随首帧（默认 3）。",
+      "workflowId": "2105350415700291585",
+      "instanceType": "plus",
+      "params": [
+        {
+          "name": "firstFrame",
+          "label": "首帧图片",
+          "type": "image",
+          "required": true,
+          "nodeId": "6",
+          "fieldName": "image",
+          "accept": [".jpg", ".jpeg", ".png", ".webp"]
+        },
+        {
+          "name": "lastFrame",
+          "label": "尾帧图片",
+          "type": "image",
+          "required": true,
+          "nodeId": "4",
+          "fieldName": "image",
+          "accept": [".jpg", ".jpeg", ".png", ".webp"]
+        },
+        {
+          "name": "prompt",
+          "label": "时间线分段提示词（如 0-2s: ... / 2-5s: ...）",
+          "type": "text",
+          "required": true,
+          "nodeId": "8",
+          "fieldName": "prompt"
+        },
+        {
+          "name": "durationSeconds",
+          "label": "时长（秒，4–15）",
+          "type": "int",
+          "required": false,
+          "default": 5,
+          "nodeId": "7",
+          "fieldName": "duration_seconds"
+        },
+        {
+          "name": "aspectSelect",
+          "label": "画幅（1=1:1 2=3:4 3=4:3 4=9:16 5=16:9 6=跟随首帧）",
+          "type": "int",
+          "required": false,
+          "default": 3,
+          "nodeId": "24",
+          "fieldName": "select"
+        }
+      ],
+      "fixedOverrides": []
+    },
+    {
       "typeId": "i2v-minimax-h3-multi-ref",
       "version": 1,
       "displayName": "MiniMax H3 多参考生视频",

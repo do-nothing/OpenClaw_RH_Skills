@@ -186,6 +186,7 @@ params. Cost figures are ledger observations (order of magnitude); trust the
 | `image-edit-qwen-multi` | 主图 + 1～5 张参考图 + 指令 → 合成图（换装/姿势/配饰） | 约 25 RH 币，**零现金** |
 | `image-edit-banana2` | 0 图文生图 / 1 张改图 / 2～10 张多图融合 | 1 RH 币 **+ 约 ¥0.19/张第三方现金** |
 | `i2v-minimax-h3-first-frame` | 1 张首帧图 + 描述 → 有声短视频 | 约 81 RH 币 |
+| `i2v-minimax-h3-first-last-frame` | 首帧 + 尾帧图 + 分段提示词 → 起止过渡有声短视频（尾帧必填，留空 \"\" 或传 \"None\" 渲染均报错 805） | 约 70～81 RH 币 |
 | `i2v-minimax-h3-multi-ref` | 最多 9 图 + 3 视频 + 3 音频 + 六段式提示词 → 有声短视频 | 约 100～350 RH 币（挂视频更贵） |
 | `voice-clone-emo` | 文案 + 参考人声（+可选情绪音频）→ 克隆音色语音 | RH 币，零现金 |
 | `digital-human` | 人物照 + 参考人声 + 播报文案 → 对口型口播视频 | 约 60 RH 币 |
@@ -197,8 +198,9 @@ params. Cost figures are ledger observations (order of magnitude); trust the
    现金）。仅当需要 7～10 图融合或 Qwen 效果不达标且用户接受现金时才用。
 2. **图片编辑按参考图数量**：0 张→`image-gen-qwen`；1 张→`image-edit-qwen`；
    2～6 张→`image-edit-qwen-multi`；7～10 张→`image-edit-banana2`。
-3. **H3 视频按复杂度**："让一张图动起来"→`h3-first-frame`；多角色一致、
-   动作/运镜迁移、续写、参考音色配音→`h3-multi-ref`。
+3. **H3 视频按复杂度**："让一张图动起来"→`h3-first-frame`；给定首帧和尾帧、
+   要控制视频起止画面→`h3-first-last-frame`；多角色一致、动作/运镜迁移、
+   续写、参考音色配音→`h3-multi-ref`。
 4. **换主体不要挂源视频**（实测）：视频槽会锚定源片主角身份（editing 与
    weak_reference 写法均失败）。只挂目标主体图片；要复刻动作时按附录 B 的
    动作迁移写法并整体替换场景。
