@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""Optional Video-understand QA for Vox MVP clips.
+"""Optional multimodal QA for Vox MVP clips, via the media-understand SIBLING SKILL.
 
-Runs RunningHub rhart-text-g-25-pro/video-to-text over generated clips and asks
-a multimodal model to verify props, on-screen text, 2D paper style and artifacts.
-This is a SLOW task (upload + inference) and has a small cost, so it defaults to
-dry-run and is opt-in. One task per shot; never resubmit a pending task.
+Instead of a paid RunningHub video-to-text workflow, this calls the generic
+media-understand wrapper (Qwen3.8-Omni on Bailian; cost is token-based, roughly
+a few fen per clip). One call per clip; the model answers labeled QA lines.
+
+Trust boundary (from ground-truthed evaluation): headline OCR and speech
+transcription are reliable; fine motion direction and music/SFX descriptions
+must be verified by frame extraction / listening.
 """
 
 from __future__ import annotations
@@ -19,13 +22,11 @@ from pathlib import Path
 
 from new_project import validate_doc
 
-QA_ENDPOINT = "rhart-text-g-25-pro/video-to-text"
-RUNNINGHUB_SCRIPT = os.environ.get(
-    "RUNNINGHUB_SCRIPT",
-    os.path.join(os.path.dirname(__file__), "..", "..", "runninghub", "scripts", "runninghub.py"),
+MEDIA_UNDERSTAND_SCRIPT = os.environ.get(
+    "MEDIA_UNDERSTAND_SCRIPT",
+    os.path.join(os.path.dirname(__file__), "..", "..", "media-understand",
+                 "scripts", "media_understand.py"),
 )
-COST_RE = re.compile(r"COST:¥([0-9.]+)")
-TASK_RE = re.compile(r"Task ID:\s*([A-Za-z0-9_-]+)")
 
 try:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -51,8 +52,9 @@ def build_question(shot: dict) -> str:
     )
     return (
         "You are QA-ing an 8-second flat 2D hand-cut paper-collage animation for a "
-        "Chinese educational short. Watch the WHOLE clip, then answer ONLY with these "
-        "labeled lines (English), each on its own line, be concise:\n"
+        "Chinese educational short. Watch the WHOLE clip (visuals and sound), then "
+        "answer ONLY with these labeled lines (English), each on its own line, be "
+        "concise:\n"
         f"{title_line}"
         f"{prop_line}"
         "- TEXT_LEAK: Are there any readable prompt-like sentences, garbled fake "
@@ -66,6 +68,11 @@ def build_question(shot: dict) -> str:
     )
 
 
+def _extract(answer: str, label: str) -> str:
+    m = re.search(rf"{label}\s*[:：]\s*(.+)", answer, re.IGNORECASE)
+    return m.group(1).strip() if m else ""
+
+
 def run(project_dir: Path, only: set[str] | None, submit: bool, force: bool) -> int:
     beats = project_dir / "beats.json"
     if not beats.exists():
@@ -77,8 +84,13 @@ def run(project_dir: Path, only: set[str] | None, submit: bool, force: bool) -> 
         for e in errors:
             print(f"- {e}")
         return 1
-    if not Path(RUNNINGHUB_SCRIPT).exists():
-        raise SystemExit(f"RunningHub script not found: {RUNNINGHUB_SCRIPT}")
+    mu = Path(MEDIA_UNDERSTAND_SCRIPT)
+    if not mu.exists():
+        raise SystemExit(
+            f"media-understand script not found: {mu}\n"
+            f"Clone/install the media-understand skill next to runninghub, or set "
+            f"MEDIA_UNDERSTAND_SCRIPT. It also needs DASHSCOPE_API_KEY (see that "
+            f"skill's SKILL.md).")
 
     qa_dir = project_dir / "qa"
     qa_dir.mkdir(exist_ok=True)
@@ -97,66 +109,48 @@ def run(project_dir: Path, only: set[str] | None, submit: bool, force: bool) -> 
         if out_txt.exists() and not force and not submit:
             print(f"[{sid}] Reusing existing QA: {out_txt}")
             continue
-        question = build_question(shot)
         cmd = [
-            sys.executable, RUNNINGHUB_SCRIPT,
-            "--endpoint", QA_ENDPOINT,
-            "--prompt", question,
-            "--video", str(clip),
+            sys.executable, str(mu), "ask", str(clip),
+            build_question(shot), "--no-thinking", "--out", str(out_txt),
         ]
         if not submit:
-            print(f"[{sid}] DRY-RUN: would submit one video-understanding QA task")
+            print(f"[{sid}] DRY-RUN: would run one media-understand QA call")
             print(" ".join(f'"{c}"' if " " in c else c for c in cmd))
             continue
 
-        print(f"[{sid}] Submitting video-understanding QA; this is a slow task "
-              "(upload + inference, can take several to ~20 minutes). Waiting, no resubmit...")
+        print(f"[{sid}] Running media-understand QA (token cost, usually under a minute)...")
         env = os.environ.copy()
         env["PYTHONUTF8"] = "1"
         env["PYTHONIOENCODING"] = "utf-8"
         proc = subprocess.run(cmd, capture_output=True, text=True,
                               encoding="utf-8", errors="replace", env=env)
-        combined = "\n".join([proc.stdout or "", proc.stderr or ""]).strip()
-        if proc.returncode != 0:
-            shot["qa_error"] = combined[-3000:]
+        if proc.returncode != 0 or not out_txt.exists():
+            shot["qa_error"] = (proc.stdout + proc.stderr).strip()[-3000:]
             beats.write_text(json.dumps(doc, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-            task = TASK_RE.search(combined)
-            print(f"[{sid}] QA failed. Stopped; not resubmitted.")
-            if task:
-                print(f"Task ID: {task.group(1)}")
-            print(combined)
+            print(f"[{sid}] QA failed. Stopped.")
+            print(proc.stdout)
+            print(proc.stderr)
             return 1
 
-        # Keep only the labeled answer lines; drop progress/COST/task chatter.
-        labels = ("TITLE_OK", "PROP_PRESENT", "TEXT_LEAK", "STYLE_2D", "MOTION", "VERDICT")
-        answer = "\n".join(
-            ln.strip() for ln in (proc.stdout or "").splitlines()
-            if ln.strip().startswith(labels)
-        ).strip()
-        out_txt.write_text(answer + "\n", encoding="utf-8")
+        answer = out_txt.read_text(encoding="utf-8").strip()
         shot["qa_result_path"] = str(out_txt)
         shot["qa_verdict"] = _extract(answer, "VERDICT")
         shot["qa_prop"] = shot.get("qa_prop")
         shot.pop("qa_error", None)
-        cost = COST_RE.search(combined)
-        if cost:
-            shot["qa_cost"] = cost.group(1)
         beats.write_text(json.dumps(doc, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         print(f"[{sid}] QA saved: {out_txt}")
         print(answer)
+        print()
 
     if not submit:
-        print("\nDRY-RUN only: no task submitted, no cost. Rerun with --submit.")
+        print("\nDRY-RUN only: no call made, no cost. Rerun with --submit.")
+    else:
+        print("QA complete. Verify any FAIL with frame extraction before regenerating.")
     return 0
 
 
-def _extract(answer: str, label: str) -> str:
-    m = re.search(rf"{label}\s*[:：]\s*(.+)", answer, re.IGNORECASE)
-    return m.group(1).strip() if m else ""
-
-
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Video-understand QA via RunningHub")
+    parser = argparse.ArgumentParser(description="Multimodal clip QA via media-understand")
     parser.add_argument("project_dir")
     parser.add_argument("--only", help="Comma-separated shot IDs, e.g. s2")
     parser.add_argument("--force", action="store_true")

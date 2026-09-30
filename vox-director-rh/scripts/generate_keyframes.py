@@ -1,45 +1,34 @@
 #!/usr/bin/env python3
-"""Generate Vox MVP collage keyframes through the installed RunningHub skill.
+"""Generate Vox MVP collage keyframes through the runninghub TASK POOL.
 
-Safety rules:
-- Offline validation only unless --submit is provided.
-- Submits one shot at a time and waits for that exact task.
-- Never resubmits because a task is slow; the RunningHub client owns polling.
+Pipeline:
+- Build one typed pool job per planned shot (type image-gen-qwen, zero-cash).
+- Dry-run by default: prints the exact jobs JSON, submits nothing.
+- --submit enqueues the whole stage as ONE pool batch (pool concurrency applies),
+  then drives pool ticks in-process until every task is terminal. A task is never
+  resubmitted because it is slow.
 - Reuses existing non-empty keyframe files unless --force is provided.
-- Stops at the first failure and records endpoint/task/error on the shot.
+- Stops the stage if any task FAILED; per-shot errors are written to beats.json.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import os
-import re
-import subprocess
 import sys
 from pathlib import Path
 
-# This wrapper is run from Windows GBK consoles; force UTF-8 before printing costs.
+from new_project import validate_doc
+import rh_pool_client as pool
+
 try:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 except (AttributeError, ValueError, OSError):
     pass
 
-from new_project import validate_doc
-
-DEFAULT_ENDPOINT = "rhart-image-n-g31-flash-lite/text-to-image"
-ALLOWED_ENDPOINTS = {
-    DEFAULT_ENDPOINT,
-    "rhart-image-n-pro/text-to-image",
-}
-RUNNINGHUB_SCRIPT = os.environ.get(
-    "RUNNINGHUB_SCRIPT",
-    os.path.join(os.path.dirname(__file__), "..", "..", "runninghub", "scripts", "runninghub.py"),
-)
-TASK_ID_RE = re.compile(r"Task ID:\s*([A-Za-z0-9_-]+)")
-OUTPUT_RE = re.compile(r"OUTPUT_FILE:(.+)")
-COST_RE = re.compile(r"COST:¥([0-9.]+)")
+POOL_TYPE = "image-gen-qwen"
+ASPECT = "16:9 (Widescreen)"
 
 
 def load_doc(project_dir: Path) -> dict:
@@ -62,26 +51,11 @@ def save_doc(project_dir: Path, doc: dict) -> None:
     )
 
 
-def build_command(script: str, endpoint: str, shot: dict, output: Path) -> list[str]:
-    return [
-        sys.executable,
-        script,
-        "--endpoint",
-        endpoint,
-        "--prompt",
-        shot["keyframe_prompt"],
-        "--param",
-        "aspectRatio=16:9",
-        "-o",
-        str(output),
-    ]
-
-
 def planned_shots(doc: dict, only: set[str] | None) -> list[dict]:
     shots = doc["shots"]
     if only:
         shots = [shot for shot in shots if shot.get("id") in only]
-        missing = only - {shot.get("id") for shot in shots}
+        missing = only - {shot.get("id") for shot in doc["shots"]}
         if missing:
             raise SystemExit(f"Unknown shot ID(s): {sorted(missing)}")
     return shots
@@ -89,118 +63,103 @@ def planned_shots(doc: dict, only: set[str] | None) -> list[dict]:
 
 def existing_output(shot: dict) -> Path | None:
     value = shot.get("keyframe_path")
-    if not value:
-        return None
-    path = Path(value)
-    if path.exists() and path.is_file() and path.stat().st_size > 0:
-        return path
+    if value:
+        path = Path(value)
+        if path.exists() and path.is_file() and path.stat().st_size > 0:
+            return path
     return None
 
 
 def run(project_dir: Path, only: set[str] | None, force: bool, submit: bool) -> int:
     doc = load_doc(project_dir)
-    endpoint = doc.get("image_endpoint") or DEFAULT_ENDPOINT
-    if endpoint not in ALLOWED_ENDPOINTS:
-        raise SystemExit(f"Unsupported image endpoint: {endpoint}")
-    if endpoint == DEFAULT_ENDPOINT and doc.get("image_resolution"):
-        print("Note: Nano Banana 2 low-cost channel ignores resolution; no resolution parameter will be sent.")
-
-    script = Path(RUNNINGHUB_SCRIPT)
-    if not script.exists():
-        raise SystemExit(f"RunningHub script not found: {script}")
+    pool.ensure_pool_script()
 
     keyframe_dir = project_dir / "keyframes"
     keyframe_dir.mkdir(exist_ok=True)
-    shots = planned_shots(doc, only)
-    costs: list[str] = []
 
-    for index, shot in enumerate(shots):
+    planned: list[tuple[dict, dict]] = []
+    for shot in planned_shots(doc, only):
         sid = shot["id"]
         if not shot.get("keyframe_prompt"):
             raise SystemExit(f"{sid} is missing keyframe_prompt; run generate_keyframe_prompts.py first")
-
-        reused = existing_output(shot)
-        if reused and not force:
-            print(f"[{sid}] Reusing existing keyframe file: {reused}")
+        if existing_output(shot) and not force:
+            print(f"[{sid}] Reusing existing keyframe file: {existing_output(shot)}")
             continue
+        job = {
+            "type": POOL_TYPE,
+            "params": {"prompt": shot["keyframe_prompt"], "aspectRatio": ASPECT},
+            "outputDir": str(keyframe_dir),
+            "outputName": f"kf_{sid}",
+        }
+        planned.append((shot, job))
 
-        output = keyframe_dir / f"kf_{sid}.jpg"
-        cmd = build_command(str(script), endpoint, shot, output)
+    if not planned:
+        print("Nothing to generate (all keyframes exist).")
+        return 0
 
-        if not submit:
-            print(f"[{sid}] DRY-RUN: would submit one keyframe task")
-            print(" ".join(f'"{x}"' if " " in x else x for x in cmd))
-            continue
+    shots = [s for s, _ in planned]
+    jobs = [j for _, j in planned]
 
-        print(f"[{sid}] Submitting keyframe task ({index + 1}/{len(shots)}); waiting for this exact task, no duplicate submission...")
-        child_env = os.environ.copy()
-        # RunningHub prints the yen cost character; force UTF-8 so Windows GBK
-        # consoles cannot turn a completed download into a wrapper-visible failure.
-        child_env["PYTHONIOENCODING"] = "utf-8"
-        child_env["PYTHONUTF8"] = "1"
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            env=child_env,
-        )
-        combined = "\n".join([proc.stdout or "", proc.stderr or ""])
-
-        task_match = TASK_ID_RE.search(combined)
-        if task_match:
-            shot["image_task_id"] = task_match.group(1)
-
-        output_match = OUTPUT_RE.search(combined)
-        actual_path = Path(output_match.group(1).strip()) if output_match else None
-        downloaded_ok = bool(actual_path and actual_path.exists() and actual_path.stat().st_size > 0)
-
-        if proc.returncode != 0 and not downloaded_ok:
-            shot["last_error"] = combined.strip()[-2000:]
-            save_doc(project_dir, doc)
-            print(f"[{sid}] Task failed or timed out. Stopped; it will not be resubmitted automatically.")
-            if task_match:
-                print(f"Task ID: {shot['image_task_id']}")
-            print(combined.strip())
-            return 1
-
-        if not downloaded_ok:
-            shot["last_error"] = "Task reported success but no non-empty downloaded OUTPUT_FILE was found"
-            save_doc(project_dir, doc)
-            print(combined)
-            raise SystemExit(f"[{sid}] No valid output file was resolved")
-
-        if proc.returncode != 0:
-            print(f"[{sid}] RunningHub child returned code {proc.returncode}, but the output file exists; treating as success without resubmitting.")
-
-        shot["keyframe_path"] = str(actual_path)
-        shot.pop("last_error", None)
-        cost_match = COST_RE.search(combined)
-        if cost_match:
-            shot["image_cost"] = cost_match.group(1)
-            costs.append(f"{sid} ¥{cost_match.group(1)}")
-        save_doc(project_dir, doc)
-        print(f"[{sid}] Saved: {actual_path}")
-
-    if submit:
-        doc["status"] = "keyframes"
-        save_doc(project_dir, doc)
-        if costs:
-            print("花费: " + "，".join(costs))
-        print("Keyframe stage complete. Review every image before entering the video stage.")
-    else:
+    if not submit:
+        print(f"DRY-RUN: would enqueue {len(jobs)} keyframe task(s) "
+              f"({POOL_TYPE}, RH coins, no third-party cash) as one batch:")
+        print(json.dumps(jobs, ensure_ascii=False, indent=2))
         print("\nDRY-RUN only: no task was submitted and no cost was incurred.")
         print("After explicit paid-generation approval, rerun with --submit.")
+        return 0
+
+    print(f"Enqueuing {len(jobs)} keyframe task(s) as one pool batch...")
+    batch_id, pool_ids = pool.enqueue_batch(jobs)
+    print(f"batch {batch_id}: pool ids {pool_ids}")
+    for shot, pid in zip(shots, pool_ids):
+        shot["image_pool_id"] = pid
+    save_doc(project_dir, doc)  # persist pool ids BEFORE the long wait
+
+    snapshot = pool.wait_for(pool_ids)
+
+    failed = 0
+    coins_total = 0
+    for shot, pid in zip(shots, pool_ids):
+        sid = shot["id"]
+        row = snapshot[pid]
+        status = row.get("status")
+        lines = pool.task_lines(pid)
+        out = lines.get("OUTPUT_FILE")
+        ok = status == "SUCCESS" and out and Path(out).exists() and Path(out).stat().st_size > 0
+        if not ok:
+            failed += 1
+            shot["last_error"] = (row.get("error_message")
+                                  or f"pool {pid} ended {status} with no output file")
+            print(f"[{sid}] FAILED (pool {pid}): {shot['last_error']}")
+            save_doc(project_dir, doc)
+            continue
+        shot["keyframe_path"] = out
+        shot.pop("last_error", None)
+        coins = int(lines.get("COINS") or 0)
+        shot["image_coins"] = coins
+        coins_total += coins
+        print(f"[{sid}] Saved: {out} ({coins} coins)")
+        save_doc(project_dir, doc)
+
+    if failed:
+        print(f"\n{failed}/{len(shots)} keyframe task(s) failed. Successful outputs "
+              f"were kept; rerun with --submit to enqueue the missing shots (existing "
+              f"files are reused, nothing is resubmitted automatically).")
+        return 1
+
+    doc["status"] = "keyframes"
+    save_doc(project_dir, doc)
+    print(f"\nKeyframe stage complete — {len(shots)} image(s), {coins_total} RH coins.")
+    print("Review every image before entering the video stage.")
     return 0
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Generate Vox MVP keyframes via RunningHub")
+    parser = argparse.ArgumentParser(description="Generate Vox MVP keyframes via the RH task pool")
     parser.add_argument("project_dir", help="Project directory containing beats.json")
     parser.add_argument("--only", help="Comma-separated shot IDs, e.g. s1,s2")
     parser.add_argument("--force", action="store_true", help="Regenerate even if a local keyframe exists")
-    parser.add_argument("--submit", action="store_true", help="Actually submit billable RunningHub tasks")
+    parser.add_argument("--submit", action="store_true", help="Actually submit billable pool tasks")
     return parser.parse_args(argv)
 
 

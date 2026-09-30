@@ -6,7 +6,7 @@
 
 **现象：** 关键帧顶部出现整句中文场景描述，或时间线/报纸上出现乱码伪汉字。
 
-**根因：** 把中文 `scene` / `element_motion` / `palette_note` 直接写进图像提示词后，Nano Banana 会把提示词里的中文当成画面文字去画。
+**根因：** 把中文 `scene` / `element_motion` / `palette_note` 直接写进图像提示词后，图像模型会把提示词里的中文当成画面文字去画。
 
 **做法（已固化进 `generate_keyframe_prompts.py`）：**
 
@@ -27,27 +27,25 @@
 
 > clearly holding in both hands a single recognizable spiraled sea shell … NOT a ball, NOT a sphere, NOT any sports equipment, NOT orange.
 
-## 3. V3.1 Fast / Pro 低价渠道都只开放 8 秒
+## 3. H3 first-frame 任务的时长是参数，不是固定 8 秒
 
-**现象：** 以为时长可选，实际只能出 8 秒。
-
-**根因：** OpenAPI 的 `duration` 枚举只有 `'8'`，默认 8 秒本质等于固定 8 秒。模型底层可能支持更多时长，但“低价渠道版 SKU”只开 8 秒。
+**现象：** 以为时长固定，其实池类型 `i2v-minimax-h3-first-frame` 的 `durationSeconds` 接受 4–15 整数（默认 5）。
 
 **做法：**
 
-- 单镜规划仍是 3.5–5 秒，但统一生成 8 秒源片段，本地 ffmpeg 裁剪/取前段。
-- 想要 4–5 秒原生时长，需要换支持短时长的端点，先 `--info` 核对，不要假设。
-- 别把“模型通用介绍”的时长当成具体 SKU 的参数，一切以 `runninghub.py --info <endpoint>` 的枚举为准。
+- 本地合成预算按 8 秒源片设计（每镜 LEAD 0.20 + 旁白 + TAIL 0.45，7.35s 语音硬上限），所以脚本固定传 `durationSeconds=8`、`aspectSelect=5`（16:9）。
+- H3 **没有分辨率参数**，输出原生分辨率；assemble 用 scale+pad 兜底到 1280×720。
+- 别把"模型通用介绍"的参数当成具体 SKU，一切以 runninghub 技能 `task-types.json` 的类型定义为准（改动前 `pool.py` 查类型信息）。
 
-## 4. Fast 与 Pro 图生视频入参字段不同
+## 4. 池类型的文件参数走本地路径，池自动上传
 
-- Fast：图片字段是复数 `imageUrls`（多张）。
-- Pro：图片字段是单数 `imageUrl`（单张，≤10MB）。
-- RunningHub 通用脚本用 `--image PATH` 会自动映射，封装层不要手写死字段名。
+- typed job 里文件类参数（如 H3 的 `image`）直接写本地文件绝对路径；`pool.py` 入队时自动上传（带缓存），不要手写 RH 上传字段。
+- `outputName` 是**无扩展名 stem**：单结果落 `<stem>.<真实ext>`，多结果 `<stem>_0.<ext>`；回写 `clip_path` 时以池状态行 `OUTPUT_FILE:` 为准，不要假设扩展名。
+- 每阶段整批入队时带 `--manual`（不启后台 watcher），由 `rh_pool_client.py` 自己 tick 推进；一个批次只等这一批 poolId。
 
 ## 5. Windows 编码（GBK / 中文提示词）
 
-**现象：** `runninghub.py --info` 抛 `UnicodeEncodeError: 'gbk' codec`；PowerShell 控制台把中文和 em dash、弯引号显示成乱码。
+**现象：** 调用 `pool.py` 等子进程时抛 `UnicodeEncodeError: 'gbk' codec`；PowerShell 控制台把中文和 em dash、弯引号显示成乱码。
 
 **做法：**
 
@@ -151,19 +149,22 @@
 
 - 图生视频是慢任务，单次可能 **10–20 分钟甚至更久**；几分钟没结果完全正常，不等于失败。
 - 一次提交后只能等待这一个任务，**禁止因为等待时间长、看不到新输出就重新运行提交脚本**。
-- 失败、超时、或已拿到任务 ID：立刻停止本阶段，报告端点/任务 ID/错误，**必须等人工确认后才能重新发起**。
+- 失败、超时、或已拿到 poolId：立刻停止本阶段，报告池类型/poolId/错误，**必须等人工确认后才能重新发起**。
 - 判断进度优先看本地输出文件是否出现、RunningHub 后台任务状态，而不是看本地脚本有没有新打印。
 - 长批量提交建议让脚本一次跑完并耐心等待；要分段提交就用 `--only`，但同一条任务绝不能因为“等不及”再发一次。
 
-## 13. 成本与节奏实测参考
+## 13. 成本与节奏实测参考（RH 算力币，具体数以池账本 COINS 行为准）
 
-- Nano Banana 2 关键帧：约 ¥0.01/张。
-- 全能视频 V3.1 Fast 图生视频（8s 720p）：约 ¥0.20/条；Pro：约 ¥0.13/条。
-- speech-2.8-turbo TTS：约 ¥0.001/段；music-2.5 无人声 BGM：约 ¥0.12/条。
-- 关键帧/TTS 较快；视频是慢任务，单条约 1–3 分钟但**可能拖到 10–20 分钟**，BGM 约 1–2 分钟。全程坚持“一个任务只等一次，任何失败都不自动重提”。
+- `image-gen-qwen` 关键帧：**零现金**，只扣 RH 算力币（Qwen 文生图额度），适合反复重滚弱图。
+- `i2v-minimax-h3-first-frame`（MiniMax H3，plus 实例）：池里最贵的一档，量级参考——H3 多参考测试约 **348 算力币/条**；first-frame 单图以实际 `COINS:` 行结算。
+- `voice-clone-emo` 旁白：实测 **10 算力币/段**（默认音色，poolId 38 已验证）；`music-minimax` 纯音乐一条也是算力币小额。
+- 只有显式改用 `image-edit-banana2` 等类型才产生第三方现金（约 ¥0.19/张）。
+- 关键帧/TTS 较快；视频是慢任务，单条可能 **10–20 分钟**。全程坚持"一个批次只等一次，任何失败都不自动重新入队"。
 
-## 14. 可选：用 Video understand 做自动 QA
+## 14. 可选：用 media-understand 做自动 QA（不是 RunningHub）
 
-RunningHub `rhart-text-g-25-pro/video-to-text` 可对整段视频提问（道具是否正确、有无乱码/3D 形变/文字崩坏），覆盖比人工抽两帧更全。端点只需 `prompt` + `videoUrl`（≤20MB），输出是直接打到 stdout 的文本答案（末尾带 `COST:¥`），不是文件。实测一次 8 秒片段约 **65 秒**返回；仍按慢任务等待、只提交一次。
+QA 走姊妹技能 **media-understand** 的 `ask`（Qwen3.8-Omni，阿里云百炼，token 计费约 ¥0.01–0.05/镜），需要 `DASHSCOPE_API_KEY`；不再调用任何 RH 视频理解端点。
 
-封装 `scripts/qa_video_understand.py`：先在 beats 给镜头填 `qa_prop`（要核验的关键道具），默认 dry-run，`--only s2 --submit` 才付费；用固定标签问题让模型回 `TITLE_OK / PROP_PRESENT / TEXT_LEAK / STYLE_2D / MOTION / VERDICT`，只保留这些标签行（过滤进度/COST 噪声），结果落盘 `qa/qa_sN.txt`。作为**可选环节**在视频阶段后按需启用，不要默认强制跑。
+**实测采信边界（重要）：** 中文标题 OCR、旁白逐字转写、镜头数/总时长估计（±3.5%）可采信；**精细动作方向、BGM 情绪/哼鸣、拟声音效不可盲信**，必须人工抽帧/听片复核。另外 QA 问题**必须带该镜头 brief**（headline 原文 + `qa_prop` 关键道具），否则模型会漏掉风格违规——曾发生成片里真有简笔画 3D 符号（违反 NOT 3D），但空 spec 问题下模型没判失败。
+
+封装 `scripts/qa_video_understand.py`：在 beats 给镜头填 `qa_prop`（要核验的关键道具），默认 dry-run，`--only s2 --submit` 才调用；固定标签问题让模型回 `TITLE_OK / PROP_PRESENT / TEXT_LEAK / STYLE_2D / MOTION / VERDICT`，完整答案落盘 `qa/qa_sN.txt`，VERDICT 回写 beats.json。作为**可选环节**在视频阶段后按需启用，不要默认强制跑。

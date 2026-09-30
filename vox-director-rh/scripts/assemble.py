@@ -41,7 +41,7 @@ WINGET_BIN = Path(
 ) / r"Microsoft\WinGet\Packages\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-9.0.1-full_build\bin"
 FONT_SRC = r"C:\Windows\Fonts\simhei.ttf"
 WIDTH, HEIGHT, FPS = 1280, 720, 24
-SOURCE_CLIP_S = 8.0          # V3.1 Fast/Pro low-cost SKUs only emit 8s clips
+SOURCE_CLIP_S = 8.0          # H3 clips are requested with durationSeconds=8
 LEAD_S = 0.20                # silence/visual lead before each narration starts
 TAIL_S = 0.45                # tail after each narration ends (last shot too)
 VO_BOOST = 1.35

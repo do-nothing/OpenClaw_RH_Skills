@@ -13,9 +13,10 @@ from pathlib import Path
 
 from new_project import validate_doc
 
-DEFAULT_VIDEO_ENDPOINT = "rhart-video-v3.1-pro/image-to-video"
-SOURCE_DURATION_S = 8
-RESOLUTION = "720p"
+# Pool task type used by generate_clips.py: MiniMax H3 first-frame-to-video.
+DEFAULT_VIDEO_ENDPOINT = "i2v-minimax-h3-first-frame"
+SOURCE_DURATION_S = 8          # H3 accepts 4-15 s; assemble budget assumes 8 s
+ASPECT_SELECT = 5              # 16:9; H3 renders at its native resolution (no 720p param)
 
 try:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -102,9 +103,9 @@ def update(project_dir: Path, force: bool, only: set[str] | None) -> tuple[int, 
         generated += 1
 
     doc["video_endpoint"] = DEFAULT_VIDEO_ENDPOINT
-    doc["video_resolution"] = RESOLUTION
+    doc.pop("video_resolution", None)  # H3 has no resolution parameter (native output)
     doc["video_source_duration_s"] = SOURCE_DURATION_S
-    doc["video_generation_note"] = "Generate 8-second V3.1 Pro source clips at 720p; assembly trims/uses each shot's planned dur_s."
+    doc["video_generation_note"] = "Generate 8-second MiniMax H3 source clips at 16:9 via the task pool; assembly trims/uses each shot's planned dur_s."
     beats_path.write_text(json.dumps(doc, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return generated, skipped
 
@@ -119,7 +120,7 @@ def main(argv: list[str] | None = None) -> int:
     generated, skipped = update(Path(args.project_dir).resolve(), args.force, only)
     print(f"Clip prompts written: {Path(args.project_dir).resolve() / 'beats.json'}")
     print(f"Generated: {generated}; skipped: {skipped}")
-    print(f"Video endpoint: {DEFAULT_VIDEO_ENDPOINT}; source duration: {SOURCE_DURATION_S}s; resolution: {RESOLUTION}")
+    print(f"Pool video type: {DEFAULT_VIDEO_ENDPOINT}; source duration: {SOURCE_DURATION_S}s; aspect: 16:9 (native H3 resolution)")
     return 0
 
 

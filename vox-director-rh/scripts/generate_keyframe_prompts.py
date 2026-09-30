@@ -21,10 +21,11 @@ try:
 except (AttributeError, ValueError, OSError):
     pass
 
-# RunningHub reference image-models.md maps “Nano Banana 2” to this endpoint.
-DEFAULT_IMAGE_ENDPOINT = "rhart-image-n-g31-flash-lite/text-to-image"
-# RunningHub reference image-models.md maps “Nano Banana Pro” to this endpoint.
-PRO_IMAGE_ENDPOINT = "rhart-image-n-pro/text-to-image"
+# Pool task type used by generate_keyframes.py (task-types.json in the runninghub
+# skill). Qwen Image 2.1 costs RH coins only, no third-party cash.
+DEFAULT_IMAGE_ENDPOINT = "image-gen-qwen"
+# Higher-fidelity alternative that incurs third-party cash (manual override):
+PRO_IMAGE_ENDPOINT = "image-edit-banana2"
 
 THEMES = {
     "newsprint-editorial": {
@@ -187,9 +188,11 @@ def update_project(project_dir: Path, force: bool, set_endpoint: bool, only: set
         shot["keyframe_prompt"] = compose_prompt(doc, shot)
         generated += 1
 
-    if set_endpoint and not doc.get("image_endpoint"):
+    if set_endpoint:
+        # Generation always uses this pool type; normalize legacy endpoint strings
+        # from the pre-pool version instead of leaving stale values behind.
         doc["image_endpoint"] = DEFAULT_IMAGE_ENDPOINT
-    # Nano Banana 2 low-cost channel exposes prompt + aspectRatio only; do not send resolution.
+    # The pool Qwen type exposes prompt + aspectRatio only; no resolution field.
     doc.pop("image_resolution", None)
 
     beats_path.write_text(json.dumps(doc, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -202,7 +205,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--only", help="Comma-separated shot IDs, e.g. s3,s4")
     parser.add_argument("--force", action="store_true", help="Overwrite existing keyframe_prompt values")
     parser.add_argument("--set-default-endpoint", action="store_true",
-                        help=f"Set image_endpoint to Nano Banana 2 ({DEFAULT_IMAGE_ENDPOINT}) when empty")
+                        help=f"Record the pool task type ({DEFAULT_IMAGE_ENDPOINT}) in beats.json when empty")
     return parser.parse_args(argv)
 
 
@@ -215,8 +218,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Generated: {generated}; skipped existing: {skipped}")
     if skipped and not args.force:
         print("Use --force to overwrite existing keyframe_prompt values.")
-    print(f"Default image endpoint (Nano Banana 2): {DEFAULT_IMAGE_ENDPOINT}")
-    print(f"Higher-quality alternative (Nano Banana Pro): {PRO_IMAGE_ENDPOINT}")
+    print(f"Pool image type (RH coins only): {DEFAULT_IMAGE_ENDPOINT}")
+    print(f"Higher-fidelity alternative (third-party cash): {PRO_IMAGE_ENDPOINT}")
     return 0
 
 

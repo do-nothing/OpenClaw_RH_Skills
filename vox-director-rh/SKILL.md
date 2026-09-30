@@ -3,11 +3,11 @@ name: vox-director-rh
 description: 把一句话选题制作成 Vox 风格纸片拼贴讲解/广告短视频（15–60 秒，16:9）。仅 B-roll：叙事分镜、拼贴关键帧、图生视频、中文旁白、可选配乐、字幕和本地 ffmpeg 合成，媒体生成走 RunningHub。用户提到拼贴视频、Vox 风格、纸片拼贴讲解片、motion collage、拼贴广告、把某个主题/概念做成拼贴讲解视频时使用。
 ---
 
-# Vox Director (RunningHub 标准 API 版)
+# Vox Director (RunningHub 任务池版)
 
-把一句话主题做成一条**纸片拼贴讲解视频**：每个 beat 是一张撕裂纸张拼贴海报，被赋予运动，配中文旁白、配乐和字幕。媒体生成统一走 **RunningHub**，本地用 **ffmpeg + Pillow** 合成。
+把一句话主题做成一条**纸片拼贴讲解视频**：每个 beat 是一张撕裂纸张拼贴海报，被赋予运动，配中文旁白、配乐和字幕。媒体生成统一走 **RunningHub 通用异步任务池**（`runninghub` 技能的 `pool.py`），本地用 **ffmpeg + Pillow** 合成；可选的视频理解 QA 走姊妹技能 **media-understand**（阿里云百炼 Qwen3.8-Omni，按 token 计费）。
 
-本版本基于上游 Vox Director 移植，技术路线刻意不同：上游跑 Atlas Cloud 且失败自动重投；我们跑 **RunningHub，禁止自动重发任务**（省钱、防多扣），并固化了中文文字泄漏、8 秒源片、Windows 编码等实战规则。当前只做 **B-roll**（从主题生成全部画面）；A-roll（真人口播拼贴化）、C-roll（单照锚定）、元素级本地动画引擎属后续梯队，见文末。
+本版本基于上游 Vox Director 移植，技术路线刻意不同：上游跑 Atlas Cloud 且失败自动重投；我们跑 **RunningHub 任务池，禁止自动重发任务**（省钱、防多扣），并固化了中文文字泄漏、8 秒源片、Windows 编码等实战规则。当前只做 **B-roll**（从主题生成全部画面）；A-roll（真人口播拼贴化）、C-roll（单照锚定）、元素级本地动画引擎属后续梯队，见文末。
 
 ## 核心思想（先读这个）
 
@@ -21,9 +21,9 @@ description: 把一句话选题制作成 Vox 风格纸片拼贴讲解/广告短�
 ## 不可越过的规则
 
 1. 每个阶段完成后必须停下，让用户确认，再进入下一阶段。
-2. 所有付费生成前，说明将生成的数量、模型/端点、预计等待时间和费用，并等待用户明确确认。
-3. RunningHub 任务只等待**同一次提交**的结果；排队或处理慢不等于失败，**禁止因等待时间长而重复提交**。
-4. 任务失败、超时或已拿到任务 ID 后，立刻停止当前阶段，报告任务 ID、端点和错误，**必须等人工确认才能重新发起，禁止自动重试/重复提交**。
+2. 所有付费生成前，说明将生成的数量、池任务类型、预计等待时间和费用（RH 算力币/第三方现金），并等待用户明确确认。
+3. RunningHub 池任务只等待**同一次入队批次**的结果；排队或处理慢不等于失败，**禁止因等待时间长而重复入队**。
+4. 任务失败、超时或已拿到 poolId 后，立刻停止当前阶段，报告 poolId、任务类型和错误，**必须等人工确认才能重新发起，禁止自动重试/重复入队**。
 5. 已存在的非空本地素材默认复用，不重复生成；只有用户明确要求重滚才 `--force` 覆盖。
 6. 不用 Atlas Cloud，不保存/打印 API key，不执行未审计的上游脚本。
 7. 最终视频必须本地抽帧检查，并确认音频、字幕、画幅、时长；媒体文件用 `MEDIA:<绝对路径>` 直接发到聊天窗口交付，不要只贴本地路径。
@@ -40,14 +40,15 @@ description: 把一句话选题制作成 Vox 风格纸片拼贴讲解/广告短�
 - 叙事弧线 arc（8）：hook_payoff、how_it_works、timeline、myth_buster、pas、bab、man_in_hole、listicle（见 `references/narrative.md`）。
 - 运镜（6 个平面安全档）：static、push_in、pull_out、pan、tilt、parallax；相邻镜头不得重复，`static` 留给收尾金句。
 - 风格：纸片、撕纸、报纸剪贴、半调网点、平涂色块、大号标题。
-- 音频：中文 TTS（默认 speech-2.8-turbo / Wise_Woman）；用户给清晰样本时用豆包语音克隆。配乐可选，失败可关掉继续。
+- 音频：中文 TTS（`voice-clone-emo` 工作流，默认预置女声，无需样本）；用户给清晰样本时传入样本做声音克隆（情绪表达型）。配乐可选，失败可关掉继续。
 - 合成：ffmpeg + ffprobe + Pillow，输出 `final.mp4`。
 
 明确不做：A-roll、C-roll、元素级本地动画引擎、多画幅、英文工作流、大胆档运镜（orbit/dolly_zoom/roll/whip）、自动重发任务。
 
 ## 前置检查
 
-- RunningHub 技能可用、`ffmpeg`/`ffprobe` 在 PATH（找不到时脚本回退 winget 全路径）、Python + Pillow。缺失先报告，不进入生成。
+- RunningHub 技能可用（通用任务池 `scripts/rh_pool/pool.py`，已配置 API key）、`ffmpeg`/`ffprobe` 在 PATH（找不到时脚本回退 winget 全路径）、Python + Pillow。缺失先报告，不进入生成。
+- 可选 QA 需要姊妹技能 `media-understand` 与 `DASHSCOPE_API_KEY`（未配置时引导用户开通，不影响主流程）。
 
 ## 标准流程（主题 → 成片）
 
@@ -94,11 +95,11 @@ python scripts/generate_keyframes.py out/<project>          # dry-run
 python scripts/generate_keyframes.py out/<project> --submit # 用户确认数量/模型/费用后
 ```
 
-默认 Nano Banana 2：`rhart-image-n-g31-flash-lite/text-to-image`，只传 `aspectRatio=16:9`，不传分辨率。逐镜头提交并等待同一次任务，失败即停。下载到 `keyframes/` 并回写路径，然后暂停让用户检查拼贴质感、标题、风格一致性。弱图在这一步重滚（便宜），别花钱去动烂图。
+默认池类型 `image-gen-qwen`（通义万相 Qwen Image 2.1，RH 算力币计费、零现金），只传 `aspectRatio="16:9 (Widescreen)"`，不传分辨率。全片关键帧作为**一个批次**入队（池并发 3，自动排队），脚本用 manual tick 推进并等待同一次批次，失败即停。下载到 `keyframes/`（池按真实类型加扩展名）并回写路径，然后暂停让用户检查拼贴质感、标题、风格一致性。弱图在这一步重滚（便宜），别花钱去动烂图。
 
 ### 阶段 4 · 图生视频
 
-关键帧确认后，按视觉镜头（含 detail）逐个生成 8 秒源片：
+关键帧确认后，按视觉镜头（含 detail）生成 8 秒源片（整阶段一个批次）：
 
 ```powershell
 python scripts/generate_clip_prompts.py out/<project>       # 离线写英文视频提示词
@@ -107,10 +108,10 @@ python scripts/generate_clips.py out/<project> --submit     # 确认后
 ```
 
 - 只用 6 个平面安全运镜；**相邻镜头（含 anchor→detail、跨 beat）不得重复**，节奏序列按 arc（见 `references/narrative.md`）。
-- 全能视频 V3.1 Fast/Pro 低价渠道 `duration` 枚举只有 `8`：统一生成 **8 秒源片**，本地裁到镜头时长。
-- Fast 图片字段是复数 `imageUrls`、Pro 是单数 `imageUrl`；一律用通用脚本 `--image PATH` 自动映射。
+- 池类型 `i2v-minimax-h3-first-frame`（MiniMax H3，plus 实例，RH 算力币）：首帧 `image` + `prompt`，`durationSeconds=8`（范围 4–15，8 是本地合成预算），`aspectSelect=5`（16:9）。H3 无分辨率参数，输出原生分辨率，合成阶段 scale+pad 兜底到 1280×720。
+- 全片源片作为一个批次入队，manual tick 等待同一次批次，失败即停、绝不重发。
 - 主体/道具错误通常关键帧就有，按"关键帧→确认→视频"级联返工，不能只重做视频。
-- 可选视频理解 QA（按镜收费，先 dry-run）：`qa_video_understand.py`，返回 `TITLE_OK/PROP_PRESENT/TEXT_LEAK/STYLE_2D/MOTION/VERDICT`。
+- 可选视频理解 QA 走姊妹技能 **media-understand**（Qwen3.8-Omni，按 token 计费、约几分钱/镜，先 dry-run）：`qa_video_understand.py`，返回 `TITLE_OK/PROP_PRESENT/TEXT_LEAK/STYLE_2D/MOTION/VERDICT`，问题中自动带上该镜 headline/道具 brief（不带 spec 会漏风格违规）。
 
 ### 阶段 5 · 旁白与可选配乐
 
@@ -121,9 +122,9 @@ python scripts/generate_audio.py out/<project>              # dry-run
 python scripts/generate_audio.py out/<project> --submit     # 确认后
 ```
 
-默认 speech-2.8-turbo（`voice_id=Wise_Woman`、emotion=neutral、speed≈1.05）；克隆样本走豆包 seed-audio。配乐只生成一条无 vocals 器乐（music-2.5，lyrics 用 `[Instrumental]`），也可复用旧项目 `audio/bgm.mp3`（写入 `music.path`，合成自动循环铺满）。
+旁白池类型 `voice-clone-emo`：不传 `referenceAudio` 时走工作流预置的默认女声（已实测可用，零样本）；在 beats.json `voice` 中配置样本路径时传入 `referenceAudio` 做声音克隆。该工作流**不支持** voice_id/emotion/speed 参数。配乐池类型 `music-minimax`：只传 `prompt`，`lyrics` 留空=纯音乐（无 vocals 器乐），全片旁白+配乐同一批次入队。也可复用旧项目 `audio/bgm.mp3`（写入 `music.path`，合成自动循环铺满）。
 
-**时长硬预算：** 8 秒源片，每 beat 留 `LEAD 0.20 + TAIL 0.45`，单段语音最多 **7.35 秒**。每条 TTS 生成后立即 ffprobe，超时即停并给出只对该 anchor 提速重做的命令（`--only <anchorId> --speed x --force --submit`）；不裁语音、不改镜头结构、不假拉长视频。
+**时长硬预算：** 8 秒源片，每 beat 留 `LEAD 0.20 + TAIL 0.45`，单段语音最多 **7.35 秒**。每条 TTS 生成后立即 ffprobe，超时即停——该工作流无法调速，只能**压缩该 anchor 旁白字数**后用 `--only <anchorId> --force --submit` 单独重做；不裁语音、不改镜头结构、不假拉长视频。
 
 ### 阶段 6 · 本地合成
 
@@ -168,21 +169,21 @@ python scripts/assemble.py out/<project>
 - detail shot：`id=s3b`、同 `beat_id`、`beat_role=detail`、`shot_size∈{CLOSE,DETAIL}`、`title_on_image=false`、**无 headline 无 narration**。
 - 旧 v1 项目（`openclaw-vox-mvp-1`，4 镜各带旁白）继续被全部脚本支持：每 shot 视为单镜头 beat。
 
-## 模型选择（ID 可能变，生成前用 runninghub `--info` 核）
+## 池任务类型（workflowId 以 runninghub 的 task-types.json 为准，生成前用 pool.py --info 核）
 
-| 任务 | RunningHub 端点 | 备注 |
+| 任务 | 池类型 type | 计费 / 备注 |
 |---|---|---|
-| 关键帧 | `rhart-image-n-g31-flash-lite/text-to-image`（Nano Banana 2） | 中英文标题渲染好；只传 aspectRatio |
-| 关键帧高质量备选 | `rhart-image-n-pro/text-to-image`（Nano Banana Pro） | 写 `image_endpoint` |
-| 图生视频 | `rhart-video-v3.1-pro/image-to-video`（Fast 备选） | 固定 8s、720p |
-| 旁白 | `rhart-audio/text-to-audio/speech-2.8-turbo` | Wise_Woman / 克隆走豆包 seed-audio |
-| 配乐 | `rhart-audio/text-to-audio/music-2.5` | lyrics=`[Instrumental]` |
-| 可选视频 QA | `rhart-text-g-25-pro/video-to-text` | 按镜收费，先 dry-run |
+| 关键帧 | `image-gen-qwen`（通义万相 Qwen Image 2.1） | RH 算力币，零现金；只传 aspectRatio |
+| 关键帧高质量备选 | `image-edit-banana2`（Nano Banana 2） | 第三方现金约 ¥0.19/张；需手动改脚本 |
+| 图生视频 | `i2v-minimax-h3-first-frame`（MiniMax H3，plus） | RH 算力币，较贵；8s / aspectSelect=5(16:9) / 原生分辨率 |
+| 旁白 | `voice-clone-emo` | RH 算力币；不传 referenceAudio 走预置默认女声，传样本则克隆；无 voice_id/emotion/speed |
+| 配乐 | `music-minimax` | RH 算力币；只传 prompt，lyrics 留空=纯音乐 |
+| 可选视频 QA | 不经 RH：姊妹技能 `media-understand`（Qwen3.8-Omni，百炼 token 计费） | 需 `DASHSCOPE_API_KEY`，先 dry-run |
 
 ## 失败与复用
 
 - 任一 `keyframe_path`/`clip_path`/`vo_path` 已存在且非空默认复用；各生成脚本支持 `--only s2,s4` 与 `--force`，返工只重做受影响镜头。关键帧改动须级联刷新该镜 clip 提示词和视频；旁白/字幕改动只需重跑音频与合成。
-- 失败时在该 shot 写 `last_*_error`，保留任务 ID 和端点，整阶段停止等人确认，绝不自动重发。
+- 失败时在该 shot 写 `last_*_error`，保留 poolId 和池类型，整阶段停止等人确认，绝不自动重发/重新入队。
 
 ## 项目状态
 
