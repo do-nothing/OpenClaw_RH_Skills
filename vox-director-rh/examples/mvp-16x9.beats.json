@@ -1,0 +1,90 @@
+{
+  "schema_version": "openclaw-vox-mvp-1",
+  "project": "shell-money",
+  "topic": "为什么古代人会把贝壳当钱？",
+  "language": "zh-CN",
+  "aspect": "16:9",
+  "target_duration_s": 18,
+  "theme": "newsprint-editorial",
+  "status": "draft",
+  "image_endpoint": null,
+  "video_endpoint": null,
+  "voice": {
+    "mode": "tts",
+    "sample_path": null,
+    "language": "zh-CN"
+  },
+  "music": {
+    "enabled": true,
+    "prompt": "轻快但克制的纪录片配乐，弹拨乐器与轻微手鼓，纯器乐，无人声"
+  },
+  "captions": true,
+  "watermark": "",
+  "no_duplicate_submit": true,
+  "shots": [
+    {
+      "id": "s1",
+      "dur_s": 4.0,
+      "hook": true,
+      "title_on_image": true,
+      "headline": "贝壳凭什么？",
+      "narration": "几千年前，一枚海贝壳，真的能当钱花。",
+      "caption": "海贝壳，为什么能当钱？",
+      "scene": "海滩上的巨大贝壳与古代集市剪影重叠，商贩、陶罐和货物组成纸片拼贴",
+      "scene_en": "A gigantic engraved seashell dominates the center of a layered paper marketplace. Ancient traders, pottery jars, baskets, carts and goods surround it as separate black print cut-outs, with torn paper waves and a coastline behind them.",
+      "camera_move": "push_in",
+      "element_motion": "纸浪轻轻起伏，一枚贝壳像主角一样滑向画面中央，报纸碎片飘动",
+      "element_motion_en": "Paper waves rise gently, the giant shell glides slowly toward center, and abstract newspaper scraps drift without showing readable text.",
+      "palette_note": "暖黄沙滩、深蓝海色、朱红标题",
+      "palette_en": "warm sandy ochre, deep ocean blue, vermilion red title accent"
+    },
+    {
+      "id": "s2",
+      "dur_s": 4.5,
+      "hook": false,
+      "title_on_image": true,
+      "headline": "稀有",
+      "narration": "首先，它足够稀有，不是走两步就能捡到。",
+      "caption": "稀有：不是随处可见",
+      "scene": "山路、河流和遥远海岸线组成分层地图，小人带着贝壳穿越纸片地形",
+      "scene_en": "A layered paper map unfolds across mountains, winding rivers, roads and a distant coastline. A tiny traveler carries one shell through the cut-paper landscape, with layered hills and a dashed route built from abstract marks.",
+      "camera_move": "pan",
+      "element_motion": "地图分层横向移动，纸制小人向前走，虚线路线像印章一样逐段出现",
+      "element_motion_en": "The paper map layers drift horizontally, the small cut-out traveler walks forward, and the abstract dashed route appears section by section.",
+      "palette_note": "牛皮纸底色、墨绿路线、米白山脉",
+      "palette_en": "kraft paper brown, dark moss-green routes, cream-white mountains"
+    },
+    {
+      "id": "s3",
+      "dur_s": 4.5,
+      "hook": false,
+      "title_on_image": true,
+      "headline": "好认",
+      "narration": "它还坚固、好认、容易分割，适合一次次交易。",
+      "caption": "坚固、好认、方便交易",
+      "scene": "特写桌面上的贝壳、谷物、陶罐和手印符号，像一张复古交易说明书",
+      "scene_en": "A close-up flat-lay of several distinct seashells, scattered grain seeds, a clay storage jar and abstract handprint symbols, arranged like a vintage trade guide on layered paper. Include simple arrows and circular marks, but no readable words or labels.",
+      "camera_move": "parallax",
+      "element_motion": "贝壳、谷物和票据纸片以不同速度错位移动，半调网点轻轻脉动",
+      "element_motion_en": "Rigid paper shells, grain pieces and blank slips move at slightly different parallax speeds, while a simple paper arrow swings subtly into place and halftone dots pulse.",
+      "palette_note": "米白纸张、黑色墨线、青色强调块",
+      "palette_en": "cream paper, charcoal ink lines, teal accent shapes, warm clay brown"
+    },
+    {
+      "id": "s4",
+      "dur_s": 5.0,
+      "hook": false,
+      "title_on_image": true,
+      "headline": "共识",
+      "narration": "钱的本质，从来不是材质，而是一群人都愿意相信它。",
+      "caption": "钱的本质，是共同相信",
+      "scene": "贝壳变成一串符号，再连接成古代集市到现代城市的纸艺时间线",
+      "scene_en": "A glowing golden shell sits at the center like a shared symbol. One side becomes an ancient market cut-out, the other side becomes a modern city skyline, connected only by abstract shapes, dots and non-readable paper marks rather than lettering.",
+      "camera_move": "static",
+      "element_motion": "纸艺城市和集市像折叠书页一样展开，中央贝壳稳定发光，周围纸片轻轻摇摆",
+      "element_motion_en": "The locked camera holds still while the market and city unfold like folding paper pages; the central shell glows steadily and nearby abstract scraps sway gently.",
+      "palette_note": "深靛蓝背景、金色贝壳、红白标题块",
+      "palette_en": "deep indigo background, golden shell, cream paper with red and gold accent blocks"
+    }
+  ]
+}
