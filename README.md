@@ -191,6 +191,15 @@ python3 scripts/build_capabilities.py \
   --output data/capabilities.json
 ```
 
+## 姊妹技能：media-understand（音视频理解）
+
+[media-understand](./media-understand/SKILL.md) 是本仓库的通用**媒体理解**技能（与生成无关，独立可用）：把本地音频/视频（及图片）连同任意提问发给多模态大模型 Qwen3.8-Omni，回答画面描述、中文 OCR、语音逐字转写、声音事件、时间线、摘要、质检等任意问题。零第三方依赖，仅需阿里云百炼 API Key。
+
+```powershell
+python media-understand/scripts/media_understand.py ask clip.mp4 "描述画面并读出画面上的文字"
+python media-understand/scripts/media_understand.py transcribe meeting.m4a
+```
+
 ## 许可证
 
 [Apache-2.0](./LICENSE)

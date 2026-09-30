@@ -194,6 +194,15 @@ python3 scripts/build_capabilities.py \
   --output data/capabilities.json
 ```
 
+## Sister skill: media-understand (audio/video understanding)
+
+[media-understand](./media-understand/SKILL.md) is the repo's generic **media understanding** skill (generation-independent, usable on its own): send a local audio/video file (and images) with any question to the Qwen3.8-Omni multimodal LLM — visual description, Chinese OCR, verbatim speech transcription, sound events, timelines, summarization, QA, defect checks, etc. No third-party dependencies; only an Alibaba Cloud Model Studio (Bailian) API key is required.
+
+```powershell
+python media-understand/scripts/media_understand.py ask clip.mp4 "Describe the visuals and read out the on-screen text"
+python media-understand/scripts/media_understand.py transcribe meeting.m4a
+```
+
 ## License
 
 [Apache-2.0](./LICENSE)
