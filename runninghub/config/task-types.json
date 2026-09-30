@@ -21,7 +21,7 @@
           "name": "referenceAudio",
           "label": "参考人声（音色来源）",
           "type": "audio",
-          "required": true,
+          "required": false,
           "nodeId": "13",
           "fieldName": "audio",
           "accept": [".mp3", ".wav", ".m4a", ".m3a"]
