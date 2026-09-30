@@ -1,0 +1,199 @@
+{
+  "5": {
+    "inputs": {
+      "seconds": [
+        "22",
+        1
+      ],
+      "batch_size": 1
+    },
+    "class_type": "EmptyYuE2LatentAudio",
+    "_meta": {
+      "title": "Empty YuE2 Latent Audio"
+    }
+  },
+  "8": {
+    "inputs": {
+      "seed": 7,
+      "steps": 32,
+      "cfg": 1,
+      "sampler_name": "dpm_2",
+      "scheduler": "sgm_uniform",
+      "denoise": 1,
+      "model": [
+        "15",
+        0
+      ],
+      "positive": [
+        "22",
+        0
+      ],
+      "negative": [
+        "22",
+        0
+      ],
+      "latent_image": [
+        "5",
+        0
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "KSampler"
+    }
+  },
+  "9": {
+    "inputs": {
+      "samples": [
+        "8",
+        0
+      ],
+      "vae": [
+        "15",
+        2
+      ]
+    },
+    "class_type": "VAEDecodeAudio",
+    "_meta": {
+      "title": "VAE Decode Audio"
+    }
+  },
+  "10": {
+    "inputs": {
+      "filename_prefix": "audio/YuE2",
+      "format": "mp3",
+      "format.quality": "V0",
+      "audio": [
+        "9",
+        0
+      ]
+    },
+    "class_type": "SaveAudioAdvanced",
+    "_meta": {
+      "title": "Save Audio (Advanced)"
+    }
+  },
+  "15": {
+    "inputs": {
+      "ckpt_name": "yue2_3b_bf16.safetensors"
+    },
+    "class_type": "CheckpointLoaderSimple",
+    "_meta": {
+      "title": "Load Checkpoint"
+    }
+  },
+  "22": {
+    "inputs": {
+      "style": [
+        "27",
+        0
+      ],
+      "lyrics": "[verse]\nfluff the fluffy tail\nfluff the fluffy tail\nfluff the fluffy tail\nfluff the fluffy tail\n\n[verse]\nfluff the fluffy tail\nfluff the fluffy tail\nfluff the fluffy tail\nfluff the fluffy tail\n\n[verse]\nfluff the fluffy tail\nfluff the fluffy tail\nfluff the fluffy tail\nfluff the fluffy tail\n",
+      "abc": "",
+      "seed": 368092252604257,
+      "mode": "full",
+      "max_duration": [
+        "45",
+        0
+      ],
+      "temperature": 0.7600000000000001,
+      "top_p": 0.95,
+      "top_k": 100,
+      "repetition_penalty": 1.2,
+      "cfg_scale": 1,
+      "clip": [
+        "15",
+        1
+      ]
+    },
+    "class_type": "YuE2GenerateMusic",
+    "_meta": {
+      "title": "YuE2 Generate Music"
+    }
+  },
+  "27": {
+    "inputs": {
+      "value": "Instrumental chill pop with a mellow funk groove, 105 BPM. Warm, rounded electric bass with gentle syncopation, soft electronic drums, delicate hi-hats, mellow electric piano chords, and subtle synth melodies. Soft, laid-back, relaxed, and quietly playful. Light rhythmic movement, spacious arrangement, warm clean production, smooth transitions, and restrained dynamics. Maintain gentle, steady energy throughout. No vocals, aggressive percussion, harsh synths, dramatic build-ups, or big drops."
+    },
+    "class_type": "PrimitiveStringMultiline",
+    "_meta": {
+      "title": "Text (Multiline)"
+    }
+  },
+  "36": {
+    "inputs": {
+      "model": [
+        "39",
+        0
+      ],
+      "audio": [
+        "9",
+        0
+      ]
+    },
+    "class_type": "MelBandRoFormerSampler",
+    "_meta": {
+      "title": "Mel-Band RoFormer Sampler"
+    }
+  },
+  "38": {
+    "inputs": {
+      "anything": [
+        "36",
+        1
+      ]
+    },
+    "class_type": "Bjornulf_FreeVRAM",
+    "_meta": {
+      "title": "🧹 Free VRAM hack"
+    }
+  },
+  "39": {
+    "inputs": {
+      "model_name": "MelBandRoFormer_comfy/MelBandRoformer_fp16.safetensors"
+    },
+    "class_type": "MelBandRoFormerModelLoader",
+    "_meta": {
+      "title": "Mel-Band RoFormer Model Loader"
+    }
+  },
+  "45": {
+    "inputs": {
+      "a": 360
+    },
+    "class_type": "CM_IntToFloat",
+    "_meta": {
+      "title": "IntToFloat"
+    }
+  },
+  "56": {
+    "inputs": {
+      "filename_prefix": "audio/YuE2",
+      "format": "mp3",
+      "format.quality": "V0",
+      "audio": [
+        "38",
+        0
+      ]
+    },
+    "class_type": "SaveAudioAdvanced",
+    "_meta": {
+      "title": "Save Audio (Advanced)"
+    }
+  },
+  "58": {
+    "inputs": {
+      "filename_prefix": "audio/vocals",
+      "format": "mp3",
+      "format.quality": "V0",
+      "audio": [
+        "36",
+        0
+      ]
+    },
+    "class_type": "SaveAudioAdvanced",
+    "_meta": {
+      "title": "Save Vocals（人声干声）"
+    }
+  }
+}

@@ -159,7 +159,7 @@ SQLite 账本持久化（重启后 `reconcile` 断点续传）。单个任务也
 | `i2v-minimax-h3-multi-ref` | H3 高级：9 图 + 3 视频 + 3 音频，动作迁移/续写/配音 | 算力币（挂视频更贵） |
 | `voice-clone-emo` | IndexTTS2 音色克隆（可选情绪参考） | 仅算力币 |
 | `digital-human` | Wan MultiTalk 照片口播数字人 | 算力币 |
-| `music-minimax` | MiniMax Music 3 文生歌曲/纯音乐 | 算力币 |
+| `music-yue2` | YuE2 文生歌曲/纯音乐（bf16，含人声分离，出混音/伴奏/人声干声） | 算力币 |
 
 选型建议：生图/改图默认用 Qwen（零现金），需要 7～10 图融合或 Qwen 效果
 不达标时才用 Nano Banana 2；简单"让图动起来"用 H3 首帧，多素材/动作迁移/

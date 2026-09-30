@@ -122,7 +122,7 @@ python scripts/generate_audio.py out/<project>              # dry-run
 python scripts/generate_audio.py out/<project> --submit     # 确认后
 ```
 
-旁白池类型 `voice-clone-emo`：不传 `referenceAudio` 时走工作流预置的默认女声（已实测可用，零样本）；在 beats.json `voice` 中配置样本路径时传入 `referenceAudio` 做声音克隆。该工作流**不支持** voice_id/emotion/speed 参数。配乐池类型 `music-minimax`：只传 `prompt`，`lyrics` 留空=纯音乐（无 vocals 器乐），全片旁白+配乐同一批次入队。也可复用旧项目 `audio/bgm.mp3`（写入 `music.path`，合成自动循环铺满）。
+旁白池类型 `voice-clone-emo`：不传 `referenceAudio` 时走工作流预置的默认女声（已实测可用，零样本）；在 beats.json `voice` 中配置样本路径时传入 `referenceAudio` 做声音克隆。该工作流**不支持** voice_id/emotion/speed 参数。配乐池类型 `music-yue2`：只传 `style`、不传 `lyrics`（工作流用预置假歌词约束结构，再经 RoFormer 人声分离），三个产物中取**伴奏（节点 56）**为纯音乐成品，全片旁白+配乐同一批次入队。也可复用旧项目 `audio/bgm.mp3`（写入 `music.path`，合成自动循环铺满）。
 
 **时长硬预算：** 8 秒源片，每 beat 留 `LEAD 0.20 + TAIL 0.45`，单段语音最多 **7.35 秒**。每条 TTS 生成后立即 ffprobe，超时即停——该工作流无法调速，只能**压缩该 anchor 旁白字数**后用 `--only <anchorId> --force --submit` 单独重做；不裁语音、不改镜头结构、不假拉长视频。
 
@@ -177,7 +177,7 @@ python scripts/assemble.py out/<project>
 | 关键帧高质量备选 | `image-edit-banana2`（Nano Banana 2） | 第三方现金约 ¥0.19/张；需手动改脚本 |
 | 图生视频 | `i2v-minimax-h3-first-frame`（MiniMax H3，plus） | RH 算力币，较贵；8s / aspectSelect=5(16:9) / 原生分辨率 |
 | 旁白 | `voice-clone-emo` | RH 算力币；不传 referenceAudio 走预置默认女声，传样本则克隆；无 voice_id/emotion/speed |
-| 配乐 | `music-minimax` | RH 算力币；只传 prompt，lyrics 留空=纯音乐 |
+| 配乐 | `music-yue2` | RH 算力币；只传 style，lyrics 省略=假歌词+人声分离，取伴奏节点(56)产物 |
 | 可选视频 QA | 不经 RH：姊妹技能 `media-understand`（Qwen3.8-Omni，百炼 token 计费） | 需 `DASHSCOPE_API_KEY`，先 dry-run |
 
 ## 失败与复用

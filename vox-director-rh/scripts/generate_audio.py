@@ -7,7 +7,9 @@ Narration: pool type voice-clone-emo (IndexTTS2).
 - voice.mode == "clone": voice.sample_path is sent as the timbre reference.
 There is no voice_id/emotion/speed control on this workflow.
 
-BGM: pool type music-minimax with empty lyrics (pure instrumental).
+BGM: pool type music-yue2 with style only (no lyrics param -> the workflow's
+prebuilt fake lyrics keep structure, Mel-Band RoFormer strips vocals); the
+accompaniment output (save node 56) is selected as the BGM file.
 
 Default mode is a local dry-run. --submit enqueues all narration + the BGM as ONE
 pool batch and drives ticks until terminal; tasks are never auto-resubmitted.
@@ -26,7 +28,10 @@ from new_project import validate_doc, beat_groups
 import rh_pool_client as pool
 
 TTS_TYPE = "voice-clone-emo"
-MUSIC_TYPE = "music-minimax"
+MUSIC_TYPE = "music-yue2"
+# SaveAudio node id that stores the post-separation accompaniment stem
+# (RoFormer output 1). Node 10 is the pre-separation mix, node 58 the vocals.
+MUSIC_ACCOMPANIMENT_NODE = "56"
 
 # Timing budget shared with assemble.py: H3 source clips are 8 s and assemble
 # keeps LEAD before + TAIL after the speech inside that clip.
@@ -67,10 +72,10 @@ def probe_duration(ffprobe: str, path: Path) -> float:
     return float(proc.stdout.strip())
 
 
-def music_prompt(doc: dict) -> str:
+def music_style(doc: dict) -> str:
     return (
-        "Instrumental documentary background music only, NO vocals, NO lyrics, NO singing. "
-        "Light but restrained, warm and curious, plucked strings (pipa/guitar-like) with soft "
+        "instrumental documentary background music, no vocals, "
+        "light but restrained, warm and curious, plucked strings (pipa/guitar-like) with soft "
         "hand percussion, steady gentle tempo around 90 BPM, clean and unobtrusive, suitable "
         "for Chinese educational narration. "
         f"Mood reference: {doc.get('music', {}).get('prompt', '')}"
@@ -129,7 +134,7 @@ def run(project_dir: Path, force: bool, submit: bool, only: set[str] | None) -> 
     bgm_path = music_store.get("path")
     if bgm_enabled and not (bgm_path and Path(bgm_path).exists() and Path(bgm_path).stat().st_size > 0 and not force):
         planned.append((music_store, "music", {
-            "type": MUSIC_TYPE, "params": {"prompt": music_prompt(doc)},
+            "type": MUSIC_TYPE, "params": {"style": music_style(doc)},
             "outputDir": str(audio_dir), "outputName": "bgm",
         }, bgm_out, "bgm"))
     elif not bgm_enabled:
@@ -168,6 +173,14 @@ def run(project_dir: Path, force: bool, submit: bool, only: set[str] | None) -> 
         status = row.get("status")
         lines = pool.task_lines(pid)
         actual_str = lines.get("OUTPUT_FILE")
+        if kind == "music":
+            # Three stems are downloaded; the last OUTPUT_FILE line is not the
+            # accompaniment. Pick the download recorded for save node 56.
+            actual_str = next(
+                (str(dl.get("path")) for dl in (row.get("downloads_json") or [])
+                 if str(dl.get("nodeId")) == MUSIC_ACCOMPANIMENT_NODE and dl.get("ok")),
+                None,
+            )
         actual = Path(actual_str) if actual_str else None
         ok = status == "SUCCESS" and actual and actual.exists() and actual.stat().st_size > 0
         if not ok:

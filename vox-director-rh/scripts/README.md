@@ -7,7 +7,7 @@
 3. `generate_keyframes.py`：整阶段一个批次入队 RH 任务池（`image-gen-qwen`，算力币/零现金），manual tick 等待同批任务，dry-run、复用已有素材、失败即停。
 4. `generate_clip_prompts.py`：离线生成英文图生视频提示词（6 个平面安全运镜）。
 5. `generate_clips.py`：整阶段一个批次入队 RH 任务池（`i2v-minimax-h3-first-frame`，MiniMax H3，8s/16:9）；只等待，不自动重发。
-6. `generate_audio.py`：**按 beat** 生成分段旁白（`voice-clone-emo`，只有 anchor 镜产一条 TTS）+ 一条可选配乐（`music-minimax`），旁白与配乐同一批次；支持传样本声音克隆；7.35s 时长前置校验。
+6. `generate_audio.py`：**按 beat** 生成分段旁白（`voice-clone-emo`，只有 anchor 镜产一条 TTS）+ 一条可选配乐（`music-yue2`，取分离后伴奏产物），旁白与配乐同一批次；支持传样本声音克隆；7.35s 时长前置校验。
 7. `assemble.py`：ffprobe/ffmpeg/Pillow 合成 `final.mp4`；一 beat 可跨 anchor+detail 两个画面、句中切镜，字幕跨画面持续。
 8. `qa_video_understand.py`：可选的视频理解 QA，调用姊妹技能 media-understand（Qwen3.8-Omni，百炼 token 计费，先 dry-run）。
 9. `rh_pool_client.py`：任务池适配层（供 3/5/6 调用）：`enqueue_batch --manual` 入队、`tick` 非阻塞推进、`wait_for` 等待同批 poolId 全部终态，超时绝不重发。

@@ -157,7 +157,7 @@
 
 - `image-gen-qwen` 关键帧：**零现金**，只扣 RH 算力币（Qwen 文生图额度），适合反复重滚弱图。
 - `i2v-minimax-h3-first-frame`（MiniMax H3，plus 实例）：池里最贵的一档，量级参考——H3 多参考测试约 **348 算力币/条**；first-frame 单图以实际 `COINS:` 行结算。
-- `voice-clone-emo` 旁白：实测 **10 算力币/段**（默认音色，poolId 38 已验证）；`music-minimax` 纯音乐一条也是算力币小额。
+- `voice-clone-emo` 旁白：实测 **10 算力币/段**（默认音色，poolId 38 已验证）；`music-yue2`（含人声分离）实测约 **7～9 算力币/条**（poolId 41/44 已验证）。
 - 只有显式改用 `image-edit-banana2` 等类型才产生第三方现金（约 ¥0.19/张）。
 - 关键帧/TTS 较快；视频是慢任务，单条可能 **10–20 分钟**。全程坚持"一个批次只等一次，任何失败都不自动重新入队"。
 

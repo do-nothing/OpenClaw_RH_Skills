@@ -44,7 +44,7 @@ Batch file (`jobs.json`) — a list of jobs, each `{type, params, outputDir?, ou
 
 ```json
 [
-  {"type": "music-minimax", "params": {"prompt": "..."}},
+  {"type": "music-yue2", "params": {"style": "lo-fi chill beats, soft piano, no vocals"}},
   {"type": "digital-human", "params": {"image": "/path/p.jpg", "audio": "/path/a.m4a", "text": "..."}}
 ]
 ```
@@ -57,7 +57,7 @@ context** and pass it as a plaintext flag (there is no environment variable):
 ```bash
 python3 {baseDir}/scripts/rh_pool/pool.py enqueue \
   --openclawSessionKey "agent:main:xxxx" \
-  --type music-minimax --param prompt="lo-fi chill beats, soft piano"
+  --type music-yue2 --param style="lo-fi chill beats, soft piano, no vocals"
 
 python3 {baseDir}/scripts/rh_pool/pool.py enqueue \
   --openclawSessionKey "agent:main:xxxx" --from-file jobs.json
@@ -189,7 +189,7 @@ params. Cost figures are ledger observations (order of magnitude); trust the
 | `i2v-minimax-h3-multi-ref` | 最多 9 图 + 3 视频 + 3 音频 + 六段式提示词 → 有声短视频 | 约 100～350 RH 币（挂视频更贵） |
 | `voice-clone-emo` | 文案 + 参考人声（+可选情绪音频）→ 克隆音色语音 | RH 币，零现金 |
 | `digital-human` | 人物照 + 参考人声 + 播报文案 → 对口型口播视频 | 约 60 RH 币 |
-| `music-minimax` | 风格描述 + 歌词（可空）→ 完整歌曲/纯音乐 | 约 34 RH 币 |
+| `music-yue2` | 风格标签 + 歌词（可空）→ 歌曲/纯音乐，经人声分离产出混音/伴奏/人声干声 3 个 MP3 | 约 9～17 RH 币 |
 
 ### Selection rules
 

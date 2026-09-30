@@ -76,29 +76,36 @@
       "fixedOverrides": []
     },
     {
-      "typeId": "music-minimax",
+      "typeId": "music-yue2",
       "version": 1,
-      "displayName": "MiniMax Music 3 文生音频",
-      "description": "输入音乐风格描述（如“轻柔民谣，木吉他，女声”）生成一首完整歌曲；在歌词里写好演唱内容（可用 [verse]/[chorus] 等分段标记），歌词留空则生成纯音乐。",
-      "workflowId": "2103357697491038209",
+      "displayName": "YuE2 文生音乐（歌曲 / 纯音乐）",
+      "description": "YuE2（bf16 全精度）文生音乐：风格用标签式英文描述（留空=工作流预置 chill pop），歌词自定义（支持 [intro]/[verse]/[chorus]/[outro] 等分段标记）；省略歌词参数=工作流预置假歌词，生成结构规整的三段式乐曲。每个任务经 Mel-Band RoFormer 人声分离后产出三个 MP3：分离前混音（节点 10，带歌词时的完整歌曲成品）、伴奏（节点 56，纯音乐取此文件）、人声干声（节点 58）。时长参数为上限，实际时长按歌词长度计算，撞上限会硬截断。两处种子均为 randomize。",
+      "workflowId": "2105311858507993090",
       "instanceType": "default",
       "params": [
         {
-          "name": "prompt",
-          "label": "音乐风格描述",
+          "name": "style",
+          "label": "音乐风格（标签式英文描述；留空=工作流预置 chill pop）",
           "type": "text",
-          "required": true,
-          "nodeId": "45",
-          "fieldName": "caption"
+          "required": false,
+          "nodeId": "27",
+          "fieldName": "value"
         },
         {
           "name": "lyrics",
-          "label": "歌词",
+          "label": "歌词（省略=预置假歌词；支持 [verse]/[chorus] 等标记）",
           "type": "text",
           "required": false,
-          "default": "",
-          "nodeId": "45",
+          "nodeId": "22",
           "fieldName": "lyrics"
+        },
+        {
+          "name": "maxDuration",
+          "label": "最大时长（秒，上限值；默认 360）",
+          "type": "int",
+          "required": false,
+          "nodeId": "45",
+          "fieldName": "a"
         }
       ],
       "fixedOverrides": []

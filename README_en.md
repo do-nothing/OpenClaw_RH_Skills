@@ -159,7 +159,7 @@ the pool.
 | `i2v-minimax-h3-multi-ref` | H3 advanced: 9 images + 3 videos + 3 audios; motion transfer / continuation / voice | Coins (higher with video refs) |
 | `voice-clone-emo` | IndexTTS2 voice cloning (optional emotion reference) | Coins only |
 | `digital-human` | Wan MultiTalk talking-head video from a photo | Coins |
-| `music-minimax` | MiniMax Music 3 song / instrumental generation | Coins |
+| `music-yue2` | YuE2 song / instrumental generation (bf16, vocal separation; mix/accompaniment/vocals) | Coins |
 
 Selection: prefer Qwen for image generation/editing (no cash); use Nano Banana
 2 only for 7–10 image fusion or when Qwen quality is insufficient. Simple
