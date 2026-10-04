@@ -77,12 +77,13 @@ def run(project_dir: Path, only: set[str] | None, force: bool, submit: bool) -> 
         if existing_clip(shot) and not force:
             print(f"[{sid}] Reusing existing clip file: {existing_clip(shot)}")
             continue
+        duration_s = int(shot.get("video_source_duration_s") or SOURCE_DURATION_S)
         job = {
             "type": POOL_TYPE,
             "params": {
                 "image": str(keyframe_path),
                 "prompt": shot["clip_prompt"],
-                "durationSeconds": SOURCE_DURATION_S,
+                "durationSeconds": duration_s,
                 "aspectSelect": ASPECT_SELECT,
             },
             "outputDir": str(clip_dir),
@@ -120,6 +121,7 @@ def run(project_dir: Path, only: set[str] | None, force: bool, submit: bool) -> 
     coins_total = 0
     for shot, pid in zip(shots, pool_ids):
         sid = shot["id"]
+        duration_s = int(shot.get("video_source_duration_s") or SOURCE_DURATION_S)
         row = snapshot[pid]
         status = row.get("status")
         lines = pool.task_lines(pid)
@@ -133,7 +135,7 @@ def run(project_dir: Path, only: set[str] | None, force: bool, submit: bool) -> 
             beats_path.write_text(json.dumps(doc, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             continue
         shot["clip_path"] = out
-        shot["clip_source_duration_s"] = SOURCE_DURATION_S
+        shot["clip_source_duration_s"] = duration_s
         shot.pop("last_video_error", None)
         coins = int(lines.get("COINS") or 0)
         shot["video_coins"] = coins

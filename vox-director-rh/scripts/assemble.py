@@ -231,9 +231,12 @@ def main(argv: list[str] | None = None) -> int:
         members = [(anchor, anchor_dur, "anchor")] + list(zip(details, detail_durs, ["detail"] * len(details)))
         beat_visuals = []
         for shot, seg_dur, role in members:
-            if seg_dur > SOURCE_CLIP_S + 0.05:
+            source_dur = float(shot.get("clip_source_duration_s")
+                               or shot.get("video_source_duration_s")
+                               or SOURCE_CLIP_S)
+            if seg_dur > source_dur + 0.05:
                 raise SystemExit(
-                    f"{bid}/{role} {shot.get('id')}: segment {seg_dur:.2f}s exceeds the {SOURCE_CLIP_S:.0f}s source clip."
+                    f"{bid}/{role} {shot.get('id')}: segment {seg_dur:.2f}s exceeds the {source_dur:.0f}s source clip."
                 )
             clip = resolve_project_path(project_dir, str(shot["clip_path"]))
             if not clip.exists():

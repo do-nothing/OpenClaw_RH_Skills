@@ -51,7 +51,7 @@ CAMERA = {
 }
 
 
-def compose_clip_prompt(shot: dict) -> str:
+def compose_clip_prompt(shot: dict, duration_s: int) -> str:
     move = CAMERA[shot["camera_move"]]
     element_motion = str(shot.get("element_motion_en", "")).strip()
     title_rule = (
@@ -66,7 +66,7 @@ def compose_clip_prompt(shot: dict) -> str:
         f"Camera: {move}. "
         f"Rigid paper element motion: {element_motion}. Elements may slide, sway, flutter, pivot or drift as flat cut paper, but must remain rigid and physically coherent. "
         f"{title_rule} "
-        "The shot is one continuous 8-second take with no internal cuts, no scene changes, no new objects, no morphing, no melting, no 3D rotation and no photorealistic rendering. "
+        f"The shot is one continuous {duration_s}-second take with no internal cuts, no scene changes, no new objects, no morphing, no melting, no 3D rotation and no photorealistic rendering. "
         "Use restrained, physically plausible motion and let the composition settle cleanly; the first 5 seconds will be used in the final edit."
     )
 
@@ -98,8 +98,9 @@ def update(project_dir: Path, force: bool, only: set[str] | None) -> tuple[int, 
         keyframe_path = Path(str(shot["keyframe_path"]))
         if not keyframe_path.exists() or keyframe_path.stat().st_size == 0:
             raise SystemExit(f"{sid} keyframe file does not exist or is empty: {keyframe_path}")
-        shot["clip_prompt"] = compose_clip_prompt(shot)
-        shot["video_source_duration_s"] = SOURCE_DURATION_S
+        duration_s = int(shot.get("video_source_duration_s") or SOURCE_DURATION_S)
+        shot["clip_prompt"] = compose_clip_prompt(shot, duration_s)
+        shot["video_source_duration_s"] = duration_s
         generated += 1
 
     doc["video_endpoint"] = DEFAULT_VIDEO_ENDPOINT
