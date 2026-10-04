@@ -1,6 +1,12 @@
 {
   "schemaVersion": "rh-pool-config/1",
-  "concurrency": 1,
+  "concurrency": 2,
   "defaultInstanceType": "default",
-  "pollIntervalSeconds": 30
+  "pollIntervalSeconds": 30,
+  "retry": {
+    "startupFailures": true,
+    "maxStartupRetries": 2,
+    "startupFailCodes": ["1000"],
+    "startupFailMaxElapsedS": 90
+  }
 }

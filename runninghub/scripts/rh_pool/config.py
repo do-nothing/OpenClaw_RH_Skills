@@ -34,6 +34,12 @@ class PoolConfig:
     outputDir: Path | None = None              # root; jobs land in <root>/batch-<id>/
     defaultInstanceType: str = "default"
     pollIntervalSeconds: int = 30              # polling automation cadence
+    # Narrow-gate automatic re-submission for platform startup-level failures
+    # (remote FAILED + whitelisted errorCode + quick death + retry budget).
+    startupRetryEnabled: bool = True
+    maxStartupRetries: int = 2
+    startupFailCodes: tuple[str, ...] = ("1000",)
+    startupFailMaxElapsedS: int = 90           # local observed elapsed per attempt
 
     @property
     def db_path(self) -> Path:
@@ -76,4 +82,17 @@ def load_config() -> PoolConfig:
     if out_dir:
         p = Path(str(out_dir)).expanduser()
         cfg.outputDir = p if p.is_absolute() else SKILL_DIR / p
+
+    retry = raw.get("retry")
+    if isinstance(retry, dict):
+        if "startupFailures" in retry:
+            cfg.startupRetryEnabled = bool(retry["startupFailures"])
+        if "maxStartupRetries" in retry:
+            cfg.maxStartupRetries = max(0, int(retry["maxStartupRetries"]))
+        if "startupFailCodes" in retry:
+            codes = retry["startupFailCodes"]
+            if isinstance(codes, list):
+                cfg.startupFailCodes = tuple(str(c) for c in codes)
+        if "startupFailMaxElapsedS" in retry:
+            cfg.startupFailMaxElapsedS = max(5, int(retry["startupFailMaxElapsedS"]))
     return cfg

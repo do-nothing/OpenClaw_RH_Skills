@@ -364,8 +364,68 @@ def _download_outputs(store: Store, row, results: list[dict], cfg) -> list[dict]
     return downloads
 
 
-def _poll_active(store: Store, api_key: str,
-                 batch_id: int | None = None) -> tuple[dict, list[tuple]]:
+def _startup_retry_decision(cfg, row, result: dict, now_ms: int) -> dict | None:
+    """Decide whether a terminal FAILED poll result qualifies for the narrow
+    automatic re-submission. Returns an attempt record + context, or None.
+
+    All gates must hold:
+      * the remote server explicitly reported terminal FAILED — failures
+        inferred locally from an unknown-status envelope do not qualify;
+      * the errorCode is on the configured whitelist (only "1000" is proven
+        startup-level: quick death, no charge, identical resubmit succeeds);
+      * this attempt died within the elapsed window, measured locally from
+        dispatch (includes RH queueing time; the window is deliberately loose);
+      * the per-row retry budget is not exhausted.
+    """
+    if not cfg.startupRetryEnabled:
+        return None
+    if result.get("rh_status") != "FAILED":
+        return None
+    code = str(result.get("error_code", ""))
+    if code not in cfg.startupFailCodes:
+        return None
+    attempts = _loads(row["attempts_json"])
+    if len(attempts) >= cfg.maxStartupRetries:
+        return None
+    submitted = row["submitted_at"]
+    if not submitted:
+        return None
+    elapsed_ms = now_ms - int(submitted)
+    if elapsed_ms >= cfg.startupFailMaxElapsedS * 1000:
+        return None
+    return {
+        "attempt": len(attempts) + 1,
+        "elapsed_s": elapsed_ms // 1000,
+        "record": {
+            "rh_task_id": row["rh_task_id"],
+            "at": now_ms,
+            "error_code": code,
+            "error_message": result.get("error_message", ""),
+        },
+    }
+
+
+def _report_startup_retries(cfg, retried: list[dict], store: Store,
+                            *, redispatched: bool) -> None:
+    """Emit one non-silent line per automatic re-submission to both the
+    persistent watcher log and stderr (interactive `pool.py tick`)."""
+    for r in retried:
+        if redispatched:
+            row = store.get_task(pool_id=r["poolId"])
+            new_id = (row["rh_task_id"]
+                      if row and row["status"] == "DISPATCHED" else None)
+            tail = f" -> {new_id}" if new_id else " (re-dispatch waits for a slot)"
+        else:
+            tail = " (re-dispatch on next tick)"
+        line = (f"startup failure (code={r['code']}, {r['elapsed_s']}s, "
+                f"zero cost), auto retry {r['attempt']}/{cfg.maxStartupRetries} "
+                f"poolId={r['poolId']} old={r['old_task_id']}{tail}")
+        notify.log(line)
+        print(line, file=sys.stderr)
+
+
+def _poll_active(store: Store, api_key: str, cfg,
+                 batch_id: int | None = None) -> tuple[dict, list[tuple], list[dict]]:
     """Poll every DISPATCHED task once and advance state only — no downloads.
 
     Downloading is deliberately deferred (see run_tick): a slow download must
@@ -373,11 +433,16 @@ def _poll_active(store: Store, api_key: str,
     batch_id scopes polling to one batch; reconcile polls every active batch
     (by the open-batch invariant that is at most one anyway).
 
-    Returns (summary, succeeded), where succeeded is a list of
-    (row, results) pairs awaiting download.
+    Startup-level failures that pass the narrow gates are requeued to PENDING
+    inline instead of becoming FAILED (see _startup_retry_decision).
+
+    Returns (summary, succeeded, retried), where succeeded is a list of
+    (row, results) pairs awaiting download, and retried lists requeued rows.
     """
-    summary = {"succeeded": 0, "failed": 0, "pending": 0, "poll_errors": 0}
+    summary = {"succeeded": 0, "failed": 0, "pending": 0,
+               "poll_errors": 0, "retried": 0}
     succeeded: list[tuple] = []
+    retried: list[dict] = []
     for row in store.get_active(batch_id):
         result = query_task(api_key, row["rh_task_id"])
         if not result.get("ok"):
@@ -400,13 +465,24 @@ def _poll_active(store: Store, api_key: str,
             if result.get("results"):
                 succeeded.append((row, result["results"]))
         else:
+            decision = _startup_retry_decision(
+                cfg, row, result, int(time.time() * 1000))
+            if decision is not None and store.requeue_for_startup_retry(
+                    row["id"], decision["record"]):
+                summary["retried"] += 1
+                retried.append({"poolId": row["id"],
+                                "old_task_id": row["rh_task_id"],
+                                "code": decision["record"]["error_code"],
+                                "elapsed_s": decision["elapsed_s"],
+                                "attempt": decision["attempt"]})
+                continue
             store.apply_query_result(
                 row["id"], "FAILED", error_code=result.get("error_code", ""),
                 error_type=result.get("error_type", "UNKNOWN"),
                 error_message=result.get("error_message", ""),
             )
             summary["failed"] += 1
-    return summary, succeeded
+    return summary, succeeded, retried
 
 
 def _download_succeeded(store: Store, succeeded: list[tuple], cfg) -> dict:
@@ -446,14 +522,20 @@ def run_tick(cfg, api_key: str) -> dict:
             "currentBatchId": None,
             "dispatched": {"dispatched": 0, "submit_failed": 0},
             "polled": {"succeeded": 0, "failed": 0, "pending": 0,
-                       "poll_errors": 0, "downloaded": 0, "download_errors": 0},
+                       "poll_errors": 0, "retried": 0,
+                       "downloaded": 0, "download_errors": 0},
+            "startupRetries": [],
             "counts": store.count_status(),
         }
     # All work this tick belongs to the single open batch; a batch that opens
     # concurrently (new enqueue during this tick) is picked up next tick.
     dispatch1 = _dispatch_pending(store, api_key, cfg.concurrency, batch_id)
-    poll, succeeded = _poll_active(store, api_key, batch_id)
+    poll, succeeded, retried = _poll_active(store, api_key, cfg, batch_id)
+    # Requeued startup failures are PENDING again: this refill submits them in
+    # the same tick (their own freed slot guarantees capacity).
     dispatch2 = _dispatch_pending(store, api_key, cfg.concurrency, batch_id)
+    if retried:
+        _report_startup_retries(cfg, retried, store, redispatched=True)
     poll.update(_download_succeeded(store, succeeded, cfg))
     dispatch = {
         "dispatched": dispatch1["dispatched"] + dispatch2["dispatched"],
@@ -463,6 +545,7 @@ def run_tick(cfg, api_key: str) -> dict:
         "currentBatchId": batch_id,
         "dispatched": dispatch,
         "polled": poll,
+        "startupRetries": retried,
         "counts": store.count_status(batch_id),
     }
 
@@ -489,9 +572,14 @@ def cmd_reconcile(args) -> int:
     if not api_key:
         print(json.dumps({"error": "NO_API_KEY"}))
         return 2
-    poll, succeeded = _poll_active(store, api_key)
+    poll, succeeded, retried = _poll_active(store, api_key, cfg)
+    # Reconcile never dispatches PENDING jobs by contract: requeued rows wait
+    # for the next scheduled tick / watcher pass.
+    if retried:
+        _report_startup_retries(cfg, retried, store, redispatched=False)
     poll.update(_download_succeeded(store, succeeded, cfg))
-    print(json.dumps({"reconciled": poll, "counts": store.count_status()},
+    print(json.dumps({"reconciled": poll, "startupRetries": retried,
+                      "counts": store.count_status()},
                      ensure_ascii=False, indent=2))
     return 0
 
@@ -761,8 +849,11 @@ def cmd_ls(args) -> int:
         if d.get("cost_third_party_money"):
             fee_parts.append(f"+三方{float(d['cost_third_party_money']):.2f}")
 
+        attempts = d.get("attempts_json") or []
+        id_cell = str(d["id"]) + (f"×{len(attempts) + 1}" if attempts else "")
+
         table.append([
-            str(d["id"]),
+            id_cell,
             wf_name,
             d.get("instance_type") or "-",
             submitted,

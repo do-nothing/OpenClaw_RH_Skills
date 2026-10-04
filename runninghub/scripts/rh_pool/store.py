@@ -94,6 +94,7 @@ class Store:
                     results_json   TEXT,
                     inputs_json    TEXT,            -- uploaded inputs (local->rh_file_name)
                     downloads_json TEXT,            -- downloaded output files
+                    attempts_json  TEXT,            -- auto re-submission history
                     session_key    TEXT             -- originating session (for wake-back)
                 );
 
@@ -129,6 +130,7 @@ class Store:
                 "ALTER TABLE tasks ADD COLUMN cost_third_party_money REAL",
             "inputs_json": "ALTER TABLE tasks ADD COLUMN inputs_json TEXT",
             "downloads_json": "ALTER TABLE tasks ADD COLUMN downloads_json TEXT",
+            "attempts_json": "ALTER TABLE tasks ADD COLUMN attempts_json TEXT",
             "session_key": "ALTER TABLE tasks ADD COLUMN session_key TEXT",
             "rh_status": "ALTER TABLE tasks ADD COLUMN rh_status TEXT",
         }
@@ -375,6 +377,44 @@ class Store:
                         (rh_status, ts, pool_id),
                     )
 
+    def requeue_for_startup_retry(self, pool_id: int, attempt: dict) -> bool:
+        """Reset a DISPATCHED row that died of a startup-level failure back to
+        PENDING, so the dispatch phase of the same tick re-submits it inline.
+
+        The dead remote attempt {rh_task_id, at, error_code, error_message} is
+        appended to attempts_json. Every per-attempt lifecycle field is cleared
+        - notably submitted_at, so the next mark_dispatched stamps a fresh
+        dispatch time and the elapsed window is measured per attempt. The row
+        id is stable, so callers waiting on poolId see nothing.
+
+        Returns False when the row is no longer DISPATCHED (lost a race).
+        """
+        ts = now_ms()
+        with self._db() as conn:
+            row = conn.execute(
+                "SELECT attempts_json FROM tasks "
+                "WHERE id=? AND status='DISPATCHED'", (pool_id,)
+            ).fetchone()
+            if row is None:
+                return False
+            try:
+                attempts = json.loads(row["attempts_json"]) if row["attempts_json"] else []
+            except (json.JSONDecodeError, TypeError):
+                attempts = []
+            attempts.append(attempt)
+            conn.execute(
+                """UPDATE tasks
+                   SET status='PENDING', rh_task_id=NULL, rh_status=NULL,
+                       submitted_at=NULL, started_at=NULL, finished_at=NULL,
+                       error_code=NULL, error_type=NULL, error_message=NULL,
+                       results_json=NULL, cost_money=NULL,
+                       cost_third_party_money=NULL, cost_coins=NULL,
+                       cost_time_s=NULL, attempts_json=?, updated_at=?
+                   WHERE id=? AND status='DISPATCHED'""",
+                (json.dumps(attempts, ensure_ascii=False), ts, pool_id),
+            )
+        return True
+
     # ------------------------------------------------------- uploads / ledger
     def find_upload(self, local_path: str, size: int, mtime: int) -> str | None:
         """Return cached rh_file_name when path+size+mtime match, else None."""
@@ -432,7 +472,7 @@ class Store:
 def row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
     d = dict(row)
     for key in ("node_overrides", "request_json", "results_json",
-                "inputs_json", "downloads_json"):
+                "inputs_json", "downloads_json", "attempts_json"):
         if d.get(key):
             try:
                 d[key] = json.loads(d[key])
