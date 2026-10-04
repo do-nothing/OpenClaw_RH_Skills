@@ -22,6 +22,7 @@ sys.path.insert(0, str(SCRIPTS))
 
 import audio_align  # noqa: E402
 import generate_audio  # noqa: E402
+import plan_shots  # noqa: E402
 from explainer_common import CARD_S, LEAD_S, is_grouped, beat_timeline  # noqa: E402
 from sync_script import validate_front  # noqa: E402
 
@@ -219,6 +220,55 @@ class TimelineTest(unittest.TestCase):
         self.assertAlmostEqual(b["b02"]["start"], 3.6, delta=1e-6)
         self.assertAlmostEqual(b["b03"]["start"], 5.0, delta=1e-6)
         self.assertAlmostEqual(b["b03"]["end"], 9.0, delta=1e-6)
+
+
+class ClipReuseTest(unittest.TestCase):
+    """plan_shots.clip_reusable: re-cut an existing source clip (grouped only)."""
+
+    def setUp(self):
+        self._td = tempfile.TemporaryDirectory()
+        clip = Path(self._td.name) / "c.mp4"
+        clip.write_bytes(b"x")
+        self.clip = str(clip)
+
+    def tearDown(self):
+        self._td.cleanup()
+
+    def old(self, **kw):
+        d = {"mode": "first_frame", "clip_path": self.clip,
+             "clip_source_duration_s": 8.0}
+        d.update(kw)
+        return d
+
+    def rec(self, used=7.5, mode="first_frame"):
+        return {"mode": mode, "used_duration_s": used}
+
+    def test_shorter_window_grouped(self):
+        self.assertTrue(plan_shots.clip_reusable(self.old(), self.rec(), True))
+
+    def test_margin_boundary(self):
+        # matches assemble.py probe: used may exceed source by <= 0.05
+        self.assertTrue(plan_shots.clip_reusable(
+            self.old(), self.rec(used=8.05), True))
+        self.assertFalse(plan_shots.clip_reusable(
+            self.old(), self.rec(used=8.06), True))
+
+    def test_beat_mode_never_reuses(self):
+        self.assertFalse(plan_shots.clip_reusable(self.old(), self.rec(), False))
+
+    def test_mode_change_blocks(self):
+        self.assertFalse(plan_shots.clip_reusable(
+            self.old(), self.rec(mode="first_last_frame"), True))
+
+    def test_missing_file_or_metadata(self):
+        self.assertFalse(plan_shots.clip_reusable(
+            self.old(clip_path=str(Path(self._td.name) / "nope.mp4")),
+            self.rec(), True))
+        self.assertFalse(plan_shots.clip_reusable(
+            {"mode": "first_frame", "clip_source_duration_s": 8.0},
+            self.rec(), True))
+        self.assertFalse(plan_shots.clip_reusable(
+            self.old(clip_source_duration_s=None), self.rec(), True))
 
 
 if __name__ == "__main__":

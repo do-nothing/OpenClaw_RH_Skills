@@ -18,6 +18,10 @@ audio timeline is master; no integer-second slack may accumulate).
 
 Prints the approval table (gate 2) and writes shots[] into explainer.json.
 Manual edits persist across replans by (beat_id, ord).
+
+In grouped mode a previously generated clip whose source still covers the
+new used window (same mode, clip_source_duration_s >= used - 0.05) is kept
+and re-cut locally at assemble time, so audio re-timing costs no video coins.
 """
 
 from __future__ import annotations
@@ -36,6 +40,35 @@ from explainer_common import (
 
 MOVES = ["push_in", "pan", "parallax", "tilt", "pull_out"]
 MODES = ("first_frame", "first_last_frame")
+
+# An existing clip may cover a re-planned used window up to this much short;
+# must match assemble.py's grouped clip-length probe (blk <= clip + 0.05).
+CLIP_REUSE_MARGIN_S = 0.05
+
+# Stored media + provenance fields carried over when a shot's media is reused.
+MEDIA_CARRY_FIELDS = (
+    "first_frame_path", "last_frame_path", "image_pool_id",
+    "last_image_pool_id", "image_coins", "clip_path",
+    "clip_source_duration_s", "video_pool_id", "video_coins",
+    "keyframe_prompt", "keyframe_prompt_sha256",
+    "clip_prompt", "clip_prompt_sha256", "clip_prompt_hash",
+    "last_image_error", "last_video_error",
+)
+
+
+def clip_reusable(old: dict, rec: dict, grouped: bool) -> bool:
+    """Grouped (audio-master) mode only: an existing generated clip can be
+    re-cut locally to a shorter window when the generation mode is unchanged
+    and the measured source still covers the new used duration. Beat mode
+    never does this — its last-shot integer-second slack is timeline money.
+    """
+    if not grouped or old.get("mode") != rec["mode"]:
+        return False
+    path = old.get("clip_path")
+    src = old.get("clip_source_duration_s")
+    if not path or src is None or not Path(str(path)).exists():
+        return False
+    return float(src) + CLIP_REUSE_MARGIN_S >= float(rec["used_duration_s"])
 
 
 def clamp(v: float, lo: float, hi: float) -> float:
@@ -258,13 +291,11 @@ def main(argv: list[str] | None = None) -> int:
                     and abs(float(old.get("used_duration_s") or 0) - rec["used_duration_s"]) < 0.02
                     and int(old.get("submit_duration_s") or 0) == rec["submit_duration_s"]
                 )
-                if structure_same:
-                    for k in ("first_frame_path", "last_frame_path", "image_pool_id",
-                              "last_image_pool_id", "image_coins", "clip_path",
-                              "clip_source_duration_s", "video_pool_id", "video_coins",
-                              "keyframe_prompt", "keyframe_prompt_sha256",
-                              "clip_prompt", "clip_prompt_sha256",
-                              "last_image_error", "last_video_error"):
+                if structure_same or clip_reusable(old, rec, grouped):
+                    # whole media block carries over: identical structure, or
+                    # (grouped) old source clip physically covers the new window
+                    # and gets re-cut locally by ffmpeg at assemble time
+                    for k in MEDIA_CARRY_FIELDS:
                         if k in old:
                             rec[k] = old[k]
                 else:
@@ -305,6 +336,14 @@ def main(argv: list[str] | None = None) -> int:
         if a["camera_move"] == c["camera_move"]:
             all_warns.append(f"相邻镜头 {a['id']}→{c['id']} 运镜相同（{a['camera_move']}），"
                              "可用 --move 调整")
+
+    if grouped:
+        kept = [s["id"] for s in new_shots
+                if s.get("clip_path") and Path(str(s["clip_path"])).exists()]
+        missing = [s["id"] for s in new_shots if s["id"] not in kept]
+        print(f"旧片本地 recut 复用 {len(kept)} 镜: {', '.join(kept) or '—'}")
+        if missing:
+            print(f"仍需生成视频 {len(missing)} 镜: {', '.join(missing)}")
 
     doc["shots"] = new_shots
     if doc.get("status") in ("draft", "audio"):
