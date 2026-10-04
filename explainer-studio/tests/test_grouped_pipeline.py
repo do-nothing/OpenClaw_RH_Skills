@@ -10,6 +10,7 @@ Run:  python explainer-studio/tests/test_grouped_pipeline.py
 
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 import sys
@@ -21,6 +22,7 @@ SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 import audio_align  # noqa: E402
+import assemble  # noqa: E402
 import generate_audio  # noqa: E402
 import plan_shots  # noqa: E402
 from explainer_common import CARD_S, LEAD_S, is_grouped, beat_timeline  # noqa: E402
@@ -269,6 +271,116 @@ class ClipReuseTest(unittest.TestCase):
             self.rec(), True))
         self.assertFalse(plan_shots.clip_reusable(
             self.old(clip_source_duration_s=None), self.rec(), True))
+
+
+class CaptionSplitTest(unittest.TestCase):
+    """Sequential one-line captions: punctuation split + timed frame budget."""
+
+    FONT = assemble.FONT_SRC if Path(assemble.FONT_SRC).exists() else None
+    W, H = 1280, 720
+
+    def setUp(self):
+        if not self.FONT:
+            self.skipTest("simhei.ttf unavailable")
+        self.font = assemble._font(int(self.H * assemble.FONT_RATIO))
+        self.max_w = int(self.W * assemble.WIDTH_RATIO)
+        self.target_w = int(self.W * assemble.CAP_TARGET_RATIO)
+
+    def split(self, text):
+        return assemble.split_captions(text, self.font,
+                                       self.max_w, self.target_w)
+
+    BRK = "".join(assemble.CAP_BREAK_AFTER)
+
+    def _strip_brk(self, s):
+        return s.translate(str.maketrans("", "", self.BRK))
+
+    def test_punctuation_split_strips_trailing(self):
+        t = "明天就要交报告了，你却在擦桌子、给耳机线打结、反复刷同一个购物软件。"
+        p = self.split(t)
+        self.assertGreater(len(p), 3)
+        for piece in p:
+            self.assertNotIn(piece[-1], assemble.CAP_BREAK_AFTER)
+            self.assertLessEqual(assemble._tw(piece, self.font), self.max_w)
+        # first clause is long, no merge; its trailing comma is gone
+        self.assertEqual(p[0], "明天就要交报告了")
+        # no characters are lost: punctuation-free concat equals punct-free
+        # source
+        self.assertEqual("".join(self._strip_brk(x) for x in p),
+                         self._strip_brk(t))
+
+    def test_double_sentence_end_punct_stripped(self):
+        p = self.split("真的吗？！他走了。")
+        self.assertEqual(p, ["真的吗", "他走了"])
+
+    def test_anti_fragment_merges_short_lead(self):
+        # w<=5 soft lead absorbs the next clause; internal comma is kept
+        p = self.split("第一招，别想着写完报告，只告诉自己。")
+        self.assertEqual(p, ["第一招，别想着写完报告", "只告诉自己"])
+
+    def test_anti_fragment_never_crosses_sentence_end(self):
+        # the short clause ends a sentence (hard boundary): it stays alone
+        p = self.split("写五分钟。五分钟后你可以停。")
+        self.assertEqual(p, ["写五分钟", "五分钟后你可以停"])
+        # a short emphatic sentence ending is intentionally left standalone
+        p2 = self.split("我要说的就两个字，足够近。")
+        self.assertEqual(p2, ["我要说的就两个字", "足够近"])
+
+    def test_anti_fragment_blocked_by_width(self):
+        # 注意 (w=2) would merge, but the combined line exceeds target_w
+        t = "注意，活跃的竟然是认出陌生人的那片区域啊。"
+        p = self.split(t)
+        self.assertEqual(len(p), 2)
+        self.assertEqual(p[0], "注意")
+
+    def test_long_clause_split_keeps_latin_word_atomic(self):
+        t = "那为什么 deadline 前你又突然能专注了？因为那一刻，"
+        # force a secondary split with a narrow target; hard ceiling stays wide
+        p = assemble.split_captions(t, self.font, self.max_w, 400)
+        self.assertGreaterEqual(len(p), 3)
+        self.assertEqual("".join(self._strip_brk(x) for x in p),
+                         self._strip_brk(t))
+        self.assertIn("deadline", " ".join(p))
+        for piece in p:
+            self.assertLessEqual(assemble._tw(piece, self.font), 401)
+
+    def test_real_widths_fit_one_line(self):
+        # at the production target width the real b09 sentence stays one line
+        t = "那为什么 deadline 前你又突然能专注了？"
+        p = self.split(t)
+        self.assertEqual(len(p), 1)
+        self.assertLessEqual(assemble._tw(p[0], self.font), self.max_w)
+
+    def test_every_real_beat_fits_one_line(self):
+        doc_p = (Path(__file__).resolve().parents[1]
+                 / "out" / "grouped_test" / "explainer.json")
+        if not doc_p.exists():
+            self.skipTest("grouped_test project not present")
+        doc = json.loads(doc_p.read_text(encoding="utf-8"))
+        total_pieces = 0
+        for b in doc["beats"]:
+            pieces = self.split(b["narration"])
+            total_pieces += len(pieces)
+            for piece in pieces:
+                self.assertLessEqual(
+                    assemble._tw(piece, self.font), self.max_w,
+                    f"{b['id']} caption too wide: {piece}")
+        self.assertGreater(total_pieces, len(doc["beats"]))
+
+    def test_frame_budget_sums_exactly(self):
+        for avail, n in ((240, 3), (348, 7), (10, 4), (96, 5)):
+            weights = [1.0 + 0.3 * i for i in range(n)]
+            frames = assemble.allocate_piece_frames(weights, avail, 24)
+            self.assertEqual(len(frames), n)
+            self.assertEqual(sum(frames), avail)
+            self.assertTrue(all(f >= 1 for f in frames))
+
+    def test_frame_budget_min_duration_when_window_allows(self):
+        # 7 pieces over ~14.5s: each piece can afford the 0.75s minimum
+        weights = [3.0, 6.0, 3.0, 8.0, 8.0, 3.0, 11.0]
+        frames = assemble.allocate_piece_frames(weights, 348, 24)
+        self.assertEqual(sum(frames), 348)
+        self.assertTrue(all(f >= round(0.75 * 24) for f in frames))
 
 
 if __name__ == "__main__":

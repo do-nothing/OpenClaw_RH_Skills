@@ -9,8 +9,10 @@ Timeline truth:
   0.45; non-last shots trim exactly, the beat's last shot keeps its full
   integer-second source (slack lands at the beat tail).
 
-Layers: clips -> verbatim Pillow captions (one per beat) -> concat -> voice/BGM
-mix -> chapter chip + top progress overlay (final pass) -> final.mp4.
+Layers: clips concat -> sequential one-line Pillow captions (punctuation-split
+phrases timed by speech weight, one line at a time, per-beat transparent qtrle
+tracks overlaid in the final pass) -> voice/BGM mix -> chapter chip + top
+progress overlay -> final.mp4.
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -35,12 +38,17 @@ BGM_BASE = 0.45
 BGM_DUCK = 0.20
 BGM_FLAT = 0.22
 SS = 2
-FONT_RATIO = 0.045
-WIDTH_RATIO = 0.90
-LINE_HEIGHT = 1.15
-BOTTOM_RATIO = 0.06
+FONT_RATIO = 0.048
+WIDTH_RATIO = 0.90          # hard ceiling: no single caption may exceed this
+CAP_TARGET_RATIO = 0.52     # preferred: split a clause further when wider
+BOTTOM_RATIO = 0.075
 OUTLINE_RATIO = 0.08
-BREAK_AFTER = "，、；：,;:"
+CAP_MIN_S = 0.75            # shortest time one caption line stays on screen
+CAP_BREAK_AFTER = frozenset("，。！？、；：,;:.!?")
+SENT_END = frozenset("。！？.!?")   # hard boundaries anti-fragment never crosses
+CAP_MERGE_WEIGHT = 5.0      # clauses this short (speech weight) absorb the next
+_WORD_RE = re.compile(r"[A-Za-z0-9]+|\s+|[^\sA-Za-z0-9]")
+_PROBE = ImageDraw.Draw(Image.new("RGB", (8, 8)))
 CHIP_COLORS = ("0xF26B38", "0x2A9D8F", "0xE9C46A", "0x457B9D")
 FONT_SRC = r"C:\Windows\Fonts\simhei.ttf"
 
@@ -72,66 +80,208 @@ def _font(size: int):
     return ImageFont.truetype(FONT_SRC, size)
 
 
-def wrap_cjk(text, font, max_w):
-    probe = ImageDraw.Draw(Image.new("RGB", (8, 8)))
+def _tw(text, font) -> float:
+    return _PROBE.textlength(text, font=font)
+
+
+def split_captions(text: str, font, max_w: float, target_w: float) -> list[str]:
+    """Split one beat narration into SHORT sequential one-line caption pieces.
+
+    Pipeline:
+    1. Forced cut after every break punctuation. Sentence-final marks
+       (。！？.!?) are HARD boundaries; the rest (，、；：) are soft.
+    2. Anti-fragment: a soft-ending clause whose speech weight <=
+       CAP_MERGE_WEIGHT greedily absorbs following clauses (boundary
+       punctuation stays inside the merged line) until it grows past the
+       threshold, reaches a hard boundary, or would exceed target_w.
+    3. Width fallback: still-too-wide lines split at balanced token
+       boundaries (CJK per character, latin words/numbers atomic).
+    4. Trailing break punctuation is stripped from every final piece
+       (internal punctuation is kept).
+    """
     text = " ".join(str(text).split())
-    if probe.textlength(text, font=font) <= max_w:
-        return [text]
-    phrases, cur = [], ""
+
+    # 1) forced punctuation cuts
+    clauses: list[list] = []
+    cur = ""
     for ch in text:
         cur += ch
-        if ch in BREAK_AFTER:
-            phrases.append(cur); cur = ""
+        if ch in CAP_BREAK_AFTER:
+            clauses.append([cur, ch in SENT_END])
+            cur = ""
     if cur:
-        phrases.append(cur)
-    lines, line = [], ""
-    for ph in phrases:
-        if probe.textlength(ph, font=font) > max_w:
-            if line:
-                lines.append(line); line = ""
-            for ch in ph:
-                if line and probe.textlength(line, font=font) + probe.textlength(ch, font=font) > max_w:
-                    lines.append(line); line = ch
-                else:
-                    line += ch
-            continue
-        if line and probe.textlength(line + ph, font=font) > max_w:
-            lines.append(line); line = ph
+        clauses.append([cur, False])
+
+    # 2) anti-fragment merge (forward-only, never across hard boundaries)
+    merged: list[list] = []
+    for clause, is_hard in clauses:
+        if (merged and not merged[-1][1]
+                and piece_weight(merged[-1][0]) <= CAP_MERGE_WEIGHT
+                and _tw(merged[-1][0] + clause, font) <= target_w):
+            merged[-1][0] += clause
+            merged[-1][1] = is_hard
         else:
-            line += ph
-    if line:
-        lines.append(line)
-    return lines
+            merged.append([clause, is_hard])
+
+    # 3) width fallback + 4) strip trailing break punctuation
+    _strip = "".join(CAP_BREAK_AFTER)
+    pieces: list[str] = []
+    for clause, _ in merged:
+        if _tw(clause, font) <= target_w:
+            lines = [clause]
+        else:
+            lines = []
+            line = ""
+            for tok in _WORD_RE.findall(clause):
+                if _tw(line + tok, font) <= target_w or not line:
+                    line += tok
+                    continue
+                lines.append(line)
+                line = tok
+                # single token (long latin word) wider than hard ceiling:
+                # break it character by character
+                while _tw(line, font) > max_w and len(line) > 1:
+                    cut = 1
+                    while cut < len(line) and _tw(line[:cut + 1], font) <= max_w:
+                        cut += 1
+                    lines.append(line[:cut])
+                    line = line[cut:]
+            lines.append(line)
+        for ln in lines:
+            ln = ln.rstrip(_strip)
+            if ln:
+                pieces.append(ln)
+    return pieces
 
 
-def render_caption(text, path: Path, w: int, h: int):
+def piece_weight(piece: str) -> float:
+    """Speech-length proxy: one CJK char ~= 1, latin/digit ~= 0.55, no punct."""
+    return sum(1.0 for ch in piece if "一" <= ch <= "鿿") + \
+        sum(0.55 for ch in piece if ch.isascii() and ch.isalnum())
+
+
+def allocate_piece_frames(weights: list[float], avail_f: int,
+                          fps: int, min_s: float = CAP_MIN_S) -> list[int]:
+    """Distribute an integer number of frames over pieces by speech weight.
+
+    Cumulative boundaries land on weighted positions; each piece gets at least
+    one frame, and >= min_s frames when the window allows it.
+    """
+    n = len(weights)
+    min_f = max(1, round(min_s * fps))
+    if n == 1 or n * min_f > avail_f:
+        # window too tight for the min rule: proportional split, min 1 frame
+        total = sum(weights) or 1.0
+        raw = [avail_f * w / total for w in weights]
+        frames = [max(1, int(round(x))) for x in raw]
+        # largest-remainder correction so the sum is exact
+        diff = avail_f - sum(frames)
+        order = sorted(range(n), key=lambda i: raw[i] - int(raw[i]),
+                       reverse=(diff > 0))
+        k = 0
+        while diff != 0 and order:
+            i = order[k % n]
+            if diff > 0:
+                frames[i] += 1; diff -= 1
+            elif frames[i] > 1:
+                frames[i] -= 1; diff += 1
+            k += 1
+        return frames
+
+    total = sum(weights) or 1.0
+    bounds = [int(round(avail_f * sum(weights[:i + 1]) / total))
+              for i in range(n)]
+    frames: list[int] = []
+    prev = 0
+    for i, end in enumerate(bounds):
+        start = prev
+        if i < n - 1 and end - start < min_f:
+            end = min(avail_f - (n - 1 - i) * min_f, start + min_f)
+        if i < n - 1 and end <= start:
+            end = start + 1
+        frames.append(max(1, end - start))
+        prev = end
+    frames[-1] = avail_f - sum(frames[:-1])
+    return frames
+
+
+def render_caption_line(text: str, path: Path, w: int, h: int):
+    """Render ONE caption line centered near the bottom (transparent bg)."""
     cw, ch = w * SS, h * SS
     size = int(h * FONT_RATIO) * SS
     font = _font(size)
-    max_w = int(w * WIDTH_RATIO) * SS
-    lines = wrap_cjk(text, font, max_w)
-    ascent, descent = font.getmetrics()
-    lh = int(size * LINE_HEIGHT)
     margin = int(h * BOTTOM_RATIO) * SS
     ow = max(2, round(size * OUTLINE_RATIO))
-    probe = ImageDraw.Draw(Image.new("RGB", (8, 8)))
-    widths = [probe.textlength(ln, font=font) for ln in lines]
-    block_h = ascent + descent + lh * (len(lines) - 1)
-    y0 = ch - margin - block_h
-    pos = [(round((cw - wd) / 2), y0 + i * lh) for i, wd in enumerate(widths)]
+    wd = _tw(text, font)
+    ascent, descent = font.getmetrics()
+    x = round((cw - wd) / 2)
+    y = ch - margin - ascent - descent
     canvas = Image.new("RGBA", (cw, ch), (0, 0, 0, 0))
     shadow = Image.new("RGBA", (cw, ch), (0, 0, 0, 0))
     sd = ImageDraw.Draw(shadow)
-    for (x, y), ln in zip(pos, lines):
-        sd.text((x + 2 * SS, y + 3 * SS), ln, font=font, fill=(0, 0, 0, 175),
-                stroke_width=ow, stroke_fill=(0, 0, 0, 175))
+    sd.text((x + 2 * SS, y + 3 * SS), text, font=font, fill=(0, 0, 0, 175),
+            stroke_width=ow, stroke_fill=(0, 0, 0, 175))
     canvas.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(4 * SS)))
     d = ImageDraw.Draw(canvas)
-    for (x, y), ln in zip(pos, lines):
-        d.text((x, y), ln, font=font, fill=(255, 255, 255, 255),
-               stroke_width=ow, stroke_fill=(26, 20, 16, 235))
+    d.text((x, y), text, font=font, fill=(255, 255, 255, 255),
+           stroke_width=ow, stroke_fill=(26, 20, 16, 235))
     canvas.resize((w, h), Image.LANCZOS).save(path)
-    return len(lines)
+
+
+def render_beat_caption_track(ffmpeg: str, bid: str, pieces: list[str],
+                              piece_frames: list[int], lead_f: int,
+                              tail_f: int, w: int, h: int,
+                              seg_dir: Path, project_dir: Path) -> Path:
+    """One transparent qtrle clip covering a beat block:
+
+    transparent lead | line 1..k shown sequentially | transparent tail.
+    Frame counts are integers, so k clips overlay with exact frame timing.
+    """
+    pngs: list[Path] = []
+    for i, text in enumerate(pieces):
+        p = seg_dir / f"cap_{bid}_{i:02d}.png"
+        render_caption_line(text, p, w, h)
+        pngs.append(p)
+
+    # Gap frames come from a transparent PNG, NOT a lavfi color source:
+    # color=c=black@0.0 frames lose their alpha on the way through qtrle and
+    # come out opaque black (pieces via PNG keep theirs).
+    blank = seg_dir / "cap_blank.png"
+    if not blank.exists():
+        Image.new("RGBA", (w, h), (0, 0, 0, 0)).save(blank)
+
+    inputs = ["-loop", "1", "-i", str(blank)]
+    for p in pngs:
+        inputs += ["-loop", "1", "-i", str(p)]
+
+    # EVERY pad fed to the concat filter must be trim-bounded: -loop image
+    # inputs are infinite, and concat waits for each pad's EOF before moving
+    # on (an untrimmed pad deadlocks the whole graph).
+    if lead_f > 0:
+        flt = [f"[0:v]format=rgba,fps={FPS},split=2[g0r][g1r]",
+               f"[g0r]trim=0:{lead_f / FPS:.6f},setpts=PTS-STARTPTS[g0]"]
+        tail_src = "[g1r]"
+        seq = ["[g0]"]
+    else:
+        flt = [f"[0:v]format=rgba,fps={FPS},setpts=PTS-STARTPTS[g1r]"]
+        tail_src = "[g1r]"
+        seq = []
+    for j, nf in enumerate(piece_frames):
+        flt.append(f"[{j + 1}:v]format=rgba,fps={FPS},"
+                   f"trim=0:{nf / FPS:.6f},setpts=PTS-STARTPTS[p{j}]")
+        seq.append(f"[p{j}]")
+    if tail_f > 0:
+        flt.append(f"{tail_src}trim=0:{tail_f / FPS:.6f},"
+                   f"setpts=PTS-STARTPTS[g1]")
+        seq.append("[g1]")
+    flt.append("".join(seq)
+               + f"concat=n={len(seq)}:v=1:a=0,format=rgba[v]")
+
+    mov = seg_dir / f"caption_{bid}.mov"
+    run([ffmpeg, "-y", *inputs, "-filter_complex", ";".join(flt),
+         "-map", "[v]", "-c:v", "qtrle", "-pix_fmt", "rgba",
+         "-an", str(mov)], project_dir)
+    return mov
 
 
 def render_chip(title: str, idx: int, total_ch: int, path: Path):
@@ -277,10 +427,6 @@ def main(argv: list[str] | None = None) -> int:
             seg_paths.append(mov)
             continue
         s, b = blk["shot"], blk["beat"]
-        cap = seg_dir / f"cap_{b['id']}.png"
-        if not cap.exists():
-            n = render_caption(b["narration"], cap, w, h)
-            print(f"  {b['id']} caption {n} line(s)")
         seg = seg_dir / f"seg_{s['id']}.mp4"
         clip = Path(str(s["clip_path"]))
         if not clip.exists():
@@ -291,12 +437,12 @@ def main(argv: list[str] | None = None) -> int:
                 raise SystemExit(
                     f"{s['id']} needs {blk['dur']:.2f}s but its clip is only "
                     f"{clip_dur:.2f}s; rerun plan_shots.py / regenerate this clip")
+        # captions are overlaid later as ONE timed track (sequential one-liners)
         fc = (f"[0:v]trim=duration={blk['dur']:.3f},setpts=PTS-STARTPTS,"
               f"scale={w}:{h}:force_original_aspect_ratio=increase,"
               f"crop={w}:{h},"
-              f"fps={FPS},setsar=1,format=yuv420p[bg];"
-              f"[bg][1:v]overlay=0:0:format=auto,format=yuv420p[v]")
-        run([ffmpeg, "-y", "-i", str(clip), "-i", str(cap), "-an",
+              f"fps={FPS},setsar=1,format=yuv420p[v]")
+        run([ffmpeg, "-y", "-i", str(clip), "-an",
              "-filter_complex", fc, "-map", "[v]",
              "-c:v", "libx264", "-preset", "medium", "-crf", "20",
              "-pix_fmt", "yuv420p", str(seg)], project_dir)
@@ -391,6 +537,66 @@ def main(argv: list[str] | None = None) -> int:
          "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-c:a", "aac",
          str(video_with_audio)], project_dir)
 
+    # ---- sequential one-line caption tracks (one transparent mov / beat) ----
+    for stale in seg_dir.glob("cap_*.png"):
+        stale.unlink()
+    for stale in seg_dir.glob("caption_*.mov"):
+        stale.unlink()
+    cap_font = _font(int(h * FONT_RATIO))
+    cap_max_w = int(w * WIDTH_RATIO)
+    cap_target_w = int(w * CAP_TARGET_RATIO)
+    bid_order = [b["id"] for b in doc["beats"]]
+    caption_movs: list[tuple[Path, float]] = []
+    for i, b in enumerate(doc["beats"]):
+        bid = b["id"]
+        block_start = beat_starts[bid]
+        block_end = beat_starts[bid_order[i + 1]] if i + 1 < len(bid_order) \
+            else total
+        if grouped:
+            ent = tl["beats"][bid]
+            vo_start, vo_end = float(ent["vo_start"]), float(ent["vo_end"])
+        else:
+            vo_start = block_start + beat_leads[bid]
+            vo_end = min(block_end, vo_start + float(b["vo_duration_s"]))
+        pieces = split_captions(b["narration"], cap_font,
+                                cap_max_w, cap_target_w)
+        over = [p for p in pieces if _tw(p, cap_font) > cap_max_w]
+        if over:
+            raise SystemExit(f"{bid}: caption wider than frame: {over}")
+        bs_f, be_f = round(block_start * FPS), round(block_end * FPS)
+        vs_f, ve_f = round(vo_start * FPS), round(vo_end * FPS)
+        lead_f = max(0, vs_f - bs_f)
+        avail = max(1, ve_f - vs_f)
+        pf = allocate_piece_frames([piece_weight(p) for p in pieces],
+                                   avail, FPS)
+        tail_f = max(0, be_f - bs_f - lead_f - sum(pf))
+        mov = render_beat_caption_track(
+            ffmpeg, bid, pieces, pf, lead_f, tail_f, w, h,
+            seg_dir, project_dir)
+        caption_movs.append((mov, block_start))
+        print(f"  {bid} captions: {len(pieces)} one-line piece(s)")
+
+    def caption_chain(base_label: str, first_input_idx: int):
+        """ffmpeg overlay chain for all beat caption movs.
+
+        Returns (last_label_bare, extra_cli_inputs, filter_lines).
+        """
+        extra: list[str] = []
+        lines: list[str] = []
+        prev = base_label  # bare pad name, e.g. "0:v"
+        last = base_label
+        for j, (_m, start) in enumerate(caption_movs):
+            idx = first_input_idx + j
+            inl, outl = f"cs{j}", f"cap{j}"
+            lines.append(f"[{idx}:v]setpts=PTS+{start:.3f}/TB[{inl}]")
+            lines.append(
+                f"[{prev}][{inl}]overlay=x=0:y=0:eof_action=pass:"
+                f"repeatlast=0:format=auto[{outl}]")
+            extra += ["-i", str(caption_movs[j][0])]
+            prev = outl
+            last = outl
+        return last, extra, lines
+
     # ---- chapter chips + progress bar (final pass, re-encode video) ----
     if chapters:
         chip_inputs: list[str] = []
@@ -413,8 +619,11 @@ def main(argv: list[str] | None = None) -> int:
             chip_inputs += ["-i", str(mov)]
 
         bar_h = max(6, round(h * 0.01))
-        filters = [
-            f"[0:v]drawbox=x=0:y=0:w=iw:h={bar_h}:color=black@0.25:t=fill[base]"]
+        cap_base_idx = 1 + len(ch_ranges) + len(chip_movs)
+        cap_last, cap_inputs, cap_lines = caption_chain("0:v", cap_base_idx)
+        filters = cap_lines + [
+            f"[{cap_last}]drawbox=x=0:y=0:w=iw:h={bar_h}:"
+            "color=black@0.25:t=fill[base]"]
         labels = ["base"]
         # Chapter fill segments. drawbox w/x are evaluated once at init in
         # ffmpeg 9 (t=NaN), so a time-varying drawbox width renders static;
@@ -454,7 +663,8 @@ def main(argv: list[str] | None = None) -> int:
             labels.append(lab)
         filters[-1] = filters[-1].replace(f"[{labels[-1]}]", "[vout]")
         run([ffmpeg, "-y", "-i", str(video_with_audio), *seg_inputs,
-             *chip_inputs, "-filter_complex", ";".join(filters),
+             *chip_inputs, *cap_inputs,
+             "-filter_complex", ";".join(filters),
              "-map", "[vout]", "-map", "0:a:0",
              "-t", f"{total:.3f}",
              "-c:v", "libx264", "-preset", "medium", "-crf", "20",
@@ -463,7 +673,11 @@ def main(argv: list[str] | None = None) -> int:
     else:
         # per-segment frame rounding in the concat-copy video can drift a few
         # frames past the audio master; hard-trim both streams to total
-        run([ffmpeg, "-y", "-i", str(video_with_audio),
+        cap_last, cap_inputs, cap_lines = caption_chain("0:v", 1)
+        cap_lines[-1] = cap_lines[-1].replace(f"[{cap_last}]", "[vout]")
+        run([ffmpeg, "-y", "-i", str(video_with_audio), *cap_inputs,
+             "-filter_complex", ";".join(cap_lines),
+             "-map", "[vout]", "-map", "0:a:0",
              "-t", f"{total:.3f}", "-c:v", "libx264", "-preset", "medium",
              "-crf", "20", "-pix_fmt", "yuv420p", "-c:a", "aac",
              "-movflags", "+faststart", str(project_dir / "final.mp4")], project_dir)
