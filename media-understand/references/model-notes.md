@@ -12,13 +12,41 @@ Everything here was tested against the live endpoint (2026-09-30).
   (`https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1`);
   the shared dashscope domain works with plain API keys.
 
-## Input formats (all as base64 data URLs of local files)
+## Delivery channels (chosen automatically; `--channel` overrides)
+
+The media reference given to the script can be a local path, an `http(s)://` public
+URL, or an `oss://` temporary-storage URL. Auto selection:
+
+1. URL input (`http(s)://`, `oss://`) → passed to the model untouched.
+2. Local file ≤ 20 MiB → read and inlined as a base64 data URL.
+3. Local file > 20 MiB → uploaded to Bailian free temporary storage
+   (`GET /api/v1/uploads?action=getPolicy&model=...` → multipart POST to OSS →
+   returns `oss://<key>`), then that URL is sent to the model. Upload is streamed
+   (file-like multipart body, 1 MB chunks, explicit Content-Length), so memory use
+   stays flat for large files.
+   - Inline-channel ceiling, measured 2026-10-04: the gateway rejects any single
+     JSON string value longer than **28,000,000 characters**
+     (`StreamReadConstraints.getMaxStringLength()`), i.e. roughly 20 MB of source
+     bytes after 4/3 base64 expansion plus the data-URL prefix. A 20.9 MB /
+     28,049,408-char payload was rejected; 20 MiB encodes to ~27.96M chars (fits).
+   - Safety net: if an inline payload is nevertheless rejected with that error,
+     auto mode transparently retries once via the upload channel. A forced
+     `--channel base64` reports the raw 400 instead of falling back.
+   - The model call carrying an `oss://` URL must include the header
+     `X-DashScope-OssResourceResolve: enable`, added automatically for `oss://`
+     references only. Public https URLs need no special header.
+   - Upload API hard limit: **1 GB per file**; URL valid **48 h**; file is bound
+     to the model name and to the account (other models/accounts can't use it).
+   - Model-side video ceiling is **2 h / 2 GB**; for 1–2 GB files host on OSS and
+     pass the https URL directly.
+
+## Input formats (per-modality wire shape)
 
 | Media | content-part type | Payload |
 |---|---|---|
-| Video | `video_url` | `{"url": "data:video/mp4;base64,...", "fps": 2.0}` |
-| Audio | `input_audio` | `{"data": "data:audio/mpeg;base64,...", "format": "mp3"}` |
-| Image | `image_url` | `{"url": "data:image/png;base64,..."}` |
+| Video | `video_url` | `{"url": "<data URL or http(s)/oss URL>", "fps": 2.0}` |
+| Audio | `input_audio` | `{"data": "<data URL or http(s)/oss URL>", "format": "mp3"}` |
+| Image | `image_url` | `{"url": "<data URL or http(s)/oss URL>"}` |
 
 Gotchas confirmed by trial:
 
@@ -97,9 +125,15 @@ headlines and narrations were known (4+4+6 shots, all Chinese):
 
 ## Large file / failure handling
 
-- The script warns above 25 MB base64 payload (soft hint only).
+- No manual handling is needed for 20 MB–1 GB local files: the upload to temporary
+  storage is automatic, with progress notes on stderr.
+- Files > 1 GB are rejected by the upload API; the script instead tells the caller to
+  host the file on OSS and pass an https URL (model accepts up to 2 h / 2 GB).
+- Temporary storage is a dev/test facility (48 h validity, 100 QPS policy limit, no
+  SLA) — production systems should use Alibaba OSS and stable public URLs.
 - On long videos: drop `--fps` (0.5–1.0), or extract the audio track and ask about
   sound and frames separately. Recipes: `references/ffprobe-cookbook.md`.
-- HTTP 400 usually means unsupported codec/container or malformed media — remux to
+- HTTP 400 usually means unsupported codec/container, malformed media, or a missing
+  `X-DashScope-OssResourceResolve` header on an oss:// call — remux to
   mp4/h264/aac or mp3/wav and retry.
 - Rate limits / transient 5xx: retry by the caller; the script stays stateless.

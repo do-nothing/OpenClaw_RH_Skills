@@ -22,7 +22,8 @@ to the calling agent.
 - Script: `scripts/media_understand.py` (Python 3.9+, standard library only)
 - Model: `qwen3.8-omni-flash` (fixed; callers never choose models or read API docs)
 - Backend: Alibaba Cloud Model Studio (Bailian / 百炼) OpenAI-compatible endpoint
-- Inputs: local files only, sent as base64 data URLs (no upload hosting needed)
+- Inputs: local files or http(s) URLs; large local files are uploaded automatically,
+  no action needed from the caller (see "Input limits" below)
 
 ## When to use
 
@@ -48,6 +49,9 @@ python scripts/media_understand.py ask clip.mp4 "逐个镜头描述画面，并�
 python scripts/media_understand.py ask meeting.m4a -p questions.txt --out result.json
 cat list.txt | python scripts/media_understand.py ask footage.mov
 
+# A public URL works the same way — no download, the model fetches it server-side
+python scripts/media_understand.py ask "https://example.com/long-video.mp4" "总结内容并给出时间线"
+
 # Verbatim speech transcription (convenience wrapper)
 python scripts/media_understand.py transcribe clip.mp4
 python scripts/media_understand.py transcribe voice.m4a --language zh-CN
@@ -58,6 +62,16 @@ Options: `--fps 2.0` (video sampling), `--system` (system message),
 `--out PATH`.
 
 The model answers on stdout; token usage is printed to stderr.
+
+## Input limits
+
+Give the script either a local file path or an `http(s)://` URL — that is all
+there is to know. If a local file is too large to send directly, the script
+uploads it automatically and tells you on stderr; nothing changes in the command
+or its output.
+
+The one exception: very large files (currently above 1 GB) cannot be auto-uploaded
+— host the file anywhere publicly reachable and pass its URL to the script instead.
 
 ## API key
 
