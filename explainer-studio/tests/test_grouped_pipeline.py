@@ -353,9 +353,9 @@ class CaptionSplitTest(unittest.TestCase):
 
     def test_every_real_beat_fits_one_line(self):
         doc_p = (Path(__file__).resolve().parents[1]
-                 / "out" / "grouped_test" / "explainer.json")
+                 / "out" / "procrastination" / "explainer.json")
         if not doc_p.exists():
-            self.skipTest("grouped_test project not present")
+            self.skipTest("procrastination project not present")
         doc = json.loads(doc_p.read_text(encoding="utf-8"))
         total_pieces = 0
         for b in doc["beats"]:
