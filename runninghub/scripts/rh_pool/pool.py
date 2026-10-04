@@ -758,6 +758,48 @@ def _clip(text: str, width: int) -> str:
     return out + "…"
 
 
+def _clip_front(text: str, width: int) -> str:
+    """Truncate from the front, keeping the tail ('…<tail>').
+
+    Local output paths carry the distinguishing file/directory names at the
+    tail; the drive and fixed prefix are the least interesting part.
+    """
+    if _disp_width(text) <= width:
+        return text
+    budget = width - 1  # reserve one column for the ellipsis
+    out = ""
+    for c in reversed(text):
+        if _disp_width(c + out) > budget:
+            break
+        out = c + out
+    return "…" + out
+
+
+# Per-path display width in the ls table (multiple outputs get joined cells).
+LS_PATH_WIDTH = 48
+
+
+def _ls_path_cell(d: dict) -> str:
+    """Build the 保存位置 cell from local download records.
+
+    Only outputs actually written to disk are shown (downloads_json[].path);
+    raw RH results are remote URLs and deliberately not used. Multi-output
+    tasks (e.g. music-yue2's three MP3s) are disambiguated with their nodeId.
+    """
+    downloads = d.get("downloads_json") or []
+    entries = [(str(x.get("nodeId") or "out"), x["path"])
+               for x in downloads if x.get("ok") and x.get("path")]
+    if not entries:
+        if any(not x.get("ok") for x in downloads):
+            return "下载失败"
+        return "-"
+    multi = len(entries) > 1
+    parts = [(f"{node}:{_clip_front(p, LS_PATH_WIDTH)}" if multi
+              else _clip_front(p, LS_PATH_WIDTH))
+             for node, p in entries]
+    return " ; ".join(parts)
+
+
 def _fmt_dur(seconds: float) -> str:
     seconds = int(seconds)
     if seconds < 0:
@@ -860,10 +902,12 @@ def cmd_ls(args) -> int:
             duration,
             d.get("rh_status") or d["status"],
             "".join(fee_parts) or "-",
+            _ls_path_cell(d),
         ])
 
     print(f"batch {batch_id} — {len(table)} task(s), outstanding: {outstanding}")
-    headers = ["ID", "workflow_name", "instance", "发起时间", "时长", "rh_status", "费用"]
+    headers = ["ID", "workflow_name", "instance", "发起时间", "时长", "rh_status",
+               "费用", "保存位置"]
     grid = [headers] + table
     widths = [max(_disp_width(row[i]) for row in grid) for i in range(len(headers))]
     for idx, row in enumerate(grid):
