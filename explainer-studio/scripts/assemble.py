@@ -298,6 +298,38 @@ def render_chip(title: str, idx: int, total_ch: int, path: Path):
     img.resize((pw, ph), Image.LANCZOS).save(path)
 
 
+BAR_GAP_PX = 3
+BAR_FILL_A = 242
+BAR_PREVIEW_A = 90
+
+
+def render_bar_tracks(w: int, bar_h: int, bounds: list[int],
+                      preview_path: Path, full_path: Path):
+    """Bake the FULL chapter-colored bar into two fixed-geometry PNGs.
+
+    bounds = [x0, x1, ..., xN] fixed pixel boundaries (x0==0, xN==w); both
+    PNGs share geometry so revealed fill always aligns with the preview.
+    Segments are separated by transparent gaps through which the static dark
+    track shows: every chapter segment (and its length share) is previewed
+    from frame 1. The full-color PNG is revealed per-frame via crop in ffmpeg,
+    which keeps completed chapters' colors pixel-fixed.
+    """
+    def paint(alpha: int, path: Path):
+        img = Image.new("RGBA", (w, bar_h), (0, 0, 0, 0))
+        d = ImageDraw.Draw(img)
+        last = len(bounds) - 2
+        for i in range(len(bounds) - 1):
+            x0, x1 = bounds[i], bounds[i + 1]
+            color = CHIP_COLORS[i % len(CHIP_COLORS)]
+            rgb = tuple(int(color[j:j + 2], 16) for j in (2, 4, 6))
+            x_right = x1 if i == last else max(x0 + 1, x1 - BAR_GAP_PX)
+            d.rectangle([x0, 0, x_right - 1, bar_h - 1], fill=rgb + (alpha,))
+        img.save(path)
+
+    paint(BAR_PREVIEW_A, preview_path)
+    paint(BAR_FILL_A, full_path)
+
+
 def render_card(title: str, idx: int, total_ch: int, path: Path, w: int, h: int):
     img = Image.new("RGB", (w, h), (20, 33, 61))
     d = ImageDraw.Draw(img)
@@ -542,6 +574,8 @@ def main(argv: list[str] | None = None) -> int:
         stale.unlink()
     for stale in seg_dir.glob("caption_*.mov"):
         stale.unlink()
+    for stale in seg_dir.glob("barseg_*.png"):
+        stale.unlink()
     cap_font = _font(int(h * FONT_RATIO))
     cap_max_w = int(w * WIDTH_RATIO)
     cap_target_w = int(w * CAP_TARGET_RATIO)
@@ -619,40 +653,37 @@ def main(argv: list[str] | None = None) -> int:
             chip_inputs += ["-i", str(mov)]
 
         bar_h = max(6, round(h * 0.01))
-        cap_base_idx = 1 + len(ch_ranges) + len(chip_movs)
+        # input indices: 0=video_with_audio, 1=bar preview PNG, 2=full-color
+        # PNG (looped, per-frame crop), 3..=chips, then caption movs
+        cap_base_idx = 3 + len(chip_movs)
         cap_last, cap_inputs, cap_lines = caption_chain("0:v", cap_base_idx)
+        # Static dark base; the dim preview track (full-width, all chapter
+        # segments visible from frame 1) sits on top of it; the full-color
+        # track is baked with FIXED chapter geometry and revealed via crop —
+        # crop evaluates its width expression per frame (drawbox doesn't in
+        # ffmpeg 9), so completed chapters never get repainted.
+        # first boundary pinned to 0: the lead silence belongs to chapter 1
+        bounds = [0] + [round(ch_ranges[i]["start"] / total * w)
+                        for i in range(1, len(ch_ranges))] + [w]
+        bar_preview = seg_dir / "bar_preview.png"
+        bar_full = seg_dir / "bar_full.png"
+        render_bar_tracks(w, bar_h, bounds, bar_preview, bar_full)
         filters = cap_lines + [
             f"[{cap_last}]drawbox=x=0:y=0:w=iw:h={bar_h}:"
-            "color=black@0.25:t=fill[base]"]
-        labels = ["base"]
-        # Chapter fill segments. drawbox w/x are evaluated once at init in
-        # ffmpeg 9 (t=NaN), so a time-varying drawbox width renders static;
-        # instead slide a static per-chapter color strip in via overlay x,
-        # which IS re-evaluated per frame.
-        bounds = [round(ch_ranges[i]["start"] / total * w)
-                  for i in range(len(ch_ranges))] + [w]
-        seg_inputs: list[str] = []
-        for i, c in enumerate(ch_ranges):
-            color = CHIP_COLORS[i % len(CHIP_COLORS)]
-            rgb = tuple(int(color[j:j + 2], 16) for j in (2, 4, 6))
-            x0, x1 = bounds[i], bounds[i + 1]
-            sw = max(1, x1 - x0 + 1)  # +1px overlap hides hairline seams
-            seg_png = seg_dir / f"barseg_{c['id']}.png"
-            Image.new("RGBA", (sw, bar_h), rgb + (242,)).save(seg_png)
-            in_idx = 1 + len(seg_inputs) // 2
-            seg_inputs += ["-i", str(seg_png)]
-            prev = labels[-1]
-            lab = f"bar{i}"
-            x_expr = (f"{x0 - sw}+min({sw},max(0,"
-                      f"(t-{c['start']:.5f})*{w:.5f}/{total:.5f}))")
-            filters.append(
-                f"[{prev}][{in_idx}:v]overlay=x='{x_expr}':y=0:"
-                f"enable='gte(t,{c['start']:.5f})'[{lab}]")
-            labels.append(lab)
+            "color=black@0.25:t=fill[base]",
+            "[base][1:v]overlay=0:0:format=auto[barp]",
+            # crop w/h and drawbox w/x only eval once at init (t=NaN in
+            # ffmpeg 9); geq alpha is evaluated per frame, so reveal the baked
+            # track by keying alpha to the playhead x. Source-alpha gate keeps
+            # the inter-segment gaps transparent.
+            "[2:v]format=rgba,geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':"
+            f"a='if(lt(X,T/{total:.5f}*W)*gt(alpha(X,Y),0),255,0)'[fill]",
+            "[barp][fill]overlay=0:0:format=auto[bar0]"]
+        labels = ["bar0"]
         for j, (_m, start, dur) in enumerate(chip_movs):
             prev = labels[-1]
             lab = f"chip{j}"
-            in_idx = len(ch_ranges) + 1 + j
+            in_idx = 3 + j
             # overlay aligns secondary PTS to the MAIN timeline, so shift the
             # short chip clip to its chapter start; otherwise chapters >1 show
             # the EOF-repeated faded-out last frame for their whole window.
@@ -662,7 +693,9 @@ def main(argv: list[str] | None = None) -> int:
                 f"enable='between(t,{start:.3f},{start + dur:.3f})'[{lab}]")
             labels.append(lab)
         filters[-1] = filters[-1].replace(f"[{labels[-1]}]", "[vout]")
-        run([ffmpeg, "-y", "-i", str(video_with_audio), *seg_inputs,
+        run([ffmpeg, "-y", "-i", str(video_with_audio),
+             "-i", str(bar_preview),
+             "-framerate", str(FPS), "-loop", "1", "-i", str(bar_full),
              *chip_inputs, *cap_inputs,
              "-filter_complex", ";".join(filters),
              "-map", "[vout]", "-map", "0:a:0",

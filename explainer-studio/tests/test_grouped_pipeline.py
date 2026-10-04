@@ -383,5 +383,50 @@ class CaptionSplitTest(unittest.TestCase):
         self.assertTrue(all(f >= round(0.75 * 24) for f in frames))
 
 
+class BarTrackTest(unittest.TestCase):
+    """Baked chapter progress tracks: fixed geometry, preview + full alpha."""
+
+    W, H_BAR = 320, 8
+
+    def _render(self, bounds):
+        tmp = Path(tempfile.mkdtemp())
+        prev_p, full_p = tmp / "prev.png", tmp / "full.png"
+        assemble.render_bar_tracks(self.W, self.H_BAR, bounds, prev_p, full_p)
+        return prev_p, full_p
+
+    def test_segments_fill_each_own_zone_with_gaps(self):
+        from PIL import Image
+        bounds = [0, 80, 200, 320]
+        prev_p, full_p = self._render(bounds)
+        img = Image.open(full_p).convert("RGBA")
+        px = img.load()
+        # solid fill inside a chapter zone ...
+        self.assertEqual(px[40, 4][3], assemble.BAR_FILL_A)
+        self.assertEqual(px[260, 4][3], assemble.BAR_FILL_A)
+        # ... transparent 3px gaps at every internal boundary
+        for xb in (80, 200):
+            for gx in range(xb - assemble.BAR_GAP_PX, xb):
+                self.assertEqual(px[gx, 4][3], 0, f"gap pixel {gx} not clear")
+        # last segment runs to the very end (no trailing gap)
+        self.assertEqual(px[319, 4][3], assemble.BAR_FILL_A)
+        # distinct chapters have distinct baked colors (boundary 80/200)
+        self.assertNotEqual(px[40, 4][:3], px[140, 4][:3])
+        self.assertNotEqual(px[140, 4][:3], px[260, 4][:3])
+
+    def test_preview_and_full_share_geometry(self):
+        from PIL import Image
+        bounds = [0, 101, 320]
+        prev_p, full_p = self._render(bounds)
+        prev, full = (Image.open(p).convert("RGBA") for p in (prev_p, full_p))
+        self.assertEqual(prev.size, (self.W, self.H_BAR))
+        # wherever the full track is opaque, the preview is too (same mask)
+        pa, fa = prev.load(), full.load()
+        for x in (0, 50, 99, 101, 150, 319):
+            self.assertEqual((pa[x, 4][3] > 0), (fa[x, 4][3] > 0))
+            if fa[x, 4][3]:
+                self.assertEqual(pa[x, 4][:3], fa[x, 4][:3])
+                self.assertEqual(pa[x, 4][3], assemble.BAR_PREVIEW_A)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
