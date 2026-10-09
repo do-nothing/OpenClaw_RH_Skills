@@ -856,9 +856,9 @@ def cmd_ls(args) -> int:
     now = datetime.now()
     now_ms = int(time.time() * 1000)
     # A healthy watcher re-polls every pollIntervalSeconds and refreshes
-    # updated_at; no update for >=3 intervals (and at least 180s) means the
+    # updated_at; no update for >=2 intervals (and at least 60s) means the
     # detached watcher is likely dead.
-    stale_after_s = max(180, cfg.pollIntervalSeconds * 3)
+    stale_after_s = max(60, cfg.pollIntervalSeconds * 2)
 
     table: list[list[str]] = []
     outstanding = 0
@@ -874,9 +874,10 @@ def cmd_ls(args) -> int:
         if (d["status"] == "DISPATCHED" and d.get("updated_at")
                 and now_ms - int(d["updated_at"]) > stale_after_s * 1000):
             stale.append((d["id"], (now_ms - int(d["updated_at"])) // 1000))
-        if (d["status"] == "PENDING" and d.get("submitted_at")
-                and now_ms - int(d["submitted_at"]) > stale_after_s * 1000):
-            stale_pending.append((d["id"], (now_ms - int(d["submitted_at"])) // 1000))
+        pending_anchor = d.get("submitted_at") or d.get("updated_at")
+        if (d["status"] == "PENDING" and pending_anchor
+                and now_ms - int(pending_anchor) > stale_after_s * 1000):
+            stale_pending.append((d["id"], (now_ms - int(pending_anchor)) // 1000))
         req = d.get("request_json") or {}
         type_id = req.get("type")
         if type_id and type_id in name_by_type:
