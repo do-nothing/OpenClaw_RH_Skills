@@ -855,13 +855,28 @@ def cmd_ls(args) -> int:
                     for t in workflow_def.load_task_types()}
     now = datetime.now()
     now_ms = int(time.time() * 1000)
+    # A healthy watcher re-polls every pollIntervalSeconds and refreshes
+    # updated_at; no update for >=3 intervals (and at least 180s) means the
+    # detached watcher is likely dead.
+    stale_after_s = max(180, cfg.pollIntervalSeconds * 3)
 
     table: list[list[str]] = []
     outstanding = 0
+    stale: list[tuple[int, int]] = []
+    stale_pending: list[tuple[int, int]] = []
+    has_dispatched = False
     for r in rows:
         d = row_to_dict(r)
         if d["status"] in ("PENDING", "DISPATCHED"):
             outstanding += 1
+        if d["status"] == "DISPATCHED":
+            has_dispatched = True
+        if (d["status"] == "DISPATCHED" and d.get("updated_at")
+                and now_ms - int(d["updated_at"]) > stale_after_s * 1000):
+            stale.append((d["id"], (now_ms - int(d["updated_at"])) // 1000))
+        if (d["status"] == "PENDING" and d.get("submitted_at")
+                and now_ms - int(d["submitted_at"]) > stale_after_s * 1000):
+            stale_pending.append((d["id"], (now_ms - int(d["submitted_at"])) // 1000))
         req = d.get("request_json") or {}
         type_id = req.get("type")
         if type_id and type_id in name_by_type:
@@ -914,6 +929,17 @@ def cmd_ls(args) -> int:
         print("  ".join(_pad(cell, widths[i]) for i, cell in enumerate(row)).rstrip())
         if idx == 0:
             print("  ".join("-" * widths[i] for i in range(len(headers))))
+
+    # Pending rows queueing behind healthy long tasks are normal; only warn
+    # when nothing was ever dispatched. Stale DISPATCHED rows always warn.
+    warn_rows = stale + ([] if has_dispatched else stale_pending)
+    if warn_rows:
+        ids = ", ".join(str(i) for i, _ in warn_rows)
+        gap_s = max(g for _, g in warn_rows)
+        print(f"\n⚠ 警告: 任务 {ids} 已 {gap_s // 60}分{gap_s % 60}秒 无推进，"
+              "后台 watcher 疑似已停止（RunningHub 端可能早已完成）。")
+        print("  恢复: pool.py tick                 # 立即推进/下载一次")
+        print("        notify.py watch              # 手动接管，持续轮询到批次清空")
     return 0
 
 

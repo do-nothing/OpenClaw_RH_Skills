@@ -329,7 +329,7 @@
       "version": 1,
       "displayName": "Qwen Image 2.1 多图编辑",
       "description": "Qwen Image 2.1：1 张主图（要被修改的图）+ 最多 5 张参考图（提供要换上的服装、配饰、姿势、长相元素等）+ 编辑指令，按需传 2～6 张图，多余图槽留空即可。典型用途：换装、换配饰、参考姿势合成。只扣 RH 算力币、不收第三方现金费；需要 7～10 张图融合时才用 Nano Banana 2。默认 16:9。",
-      "workflowId": "2104493103100026881",
+      "workflowId": "2108378084633300993",
       "instanceType": "default",
       "params": [
         {

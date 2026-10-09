@@ -254,8 +254,54 @@ def wake_session(session_key: str, message: str) -> bool:
 
 
 # -------------------------------------------------------------------- locking
+def _pid_alive(pid: int) -> bool:
+    """True if a process with `pid` is still running.
+
+    Windows: os.kill(pid, 0) is not reliable here (observed: a nonexistent
+    pid returns without error), so query the kernel directly — OpenProcess
+    plus GetExitCodeProcess (STILL_ACTIVE == 259).
+    """
+    pid = int(pid)
+    if os.name == "nt":
+        import ctypes
+        ERROR_INVALID_PARAMETER = 87
+        ERROR_ACCESS_DENIED = 5
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        STILL_ACTIVE = 259
+        k32 = ctypes.windll.kernel32
+        handle = k32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not handle:
+            err = k32.GetLastError()
+            if err == ERROR_INVALID_PARAMETER:
+                return False
+            # ACCESS_DENIED etc: the pid exists but is not queryable.
+            return True
+        try:
+            code = ctypes.c_ulong()
+            if not k32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return True
+            return code.value == STILL_ACTIVE
+        finally:
+            k32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # exists but owned by another user
+    except OSError:
+        return True  # unknown error: do not steal a possibly-live lock
+    return True
+
+
 def _acquire_lock() -> bool:
-    """Single-instance guard for the short-lived worker (file-based)."""
+    """Single-instance guard for the short-lived worker (file-based).
+
+    Reclaim rule 1: the holder pid recorded in the lock no longer exists ->
+    take over immediately (a killed pythonw watcher would otherwise block
+    recovery until LOCK_STALE_S). Rule 2 (pid reuse / unreadable pid):
+    fall back to the old stale-mtime window.
+    """
     path = _lock_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -264,7 +310,19 @@ def _acquire_lock() -> bool:
         os.close(fd)
         return True
     except FileExistsError:
-        # Stale lock from a crashed run?
+        holder: int | None = None
+        try:
+            holder = int(path.read_text(encoding="utf-8").strip())
+        except (OSError, ValueError):
+            holder = None
+        if holder is not None and not _pid_alive(holder):
+            try:
+                path.unlink()
+            except OSError:
+                return False
+            log(f"reclaimed lock from dead holder pid={holder}")
+            return _acquire_lock()
+        # Stale lock from a crashed run whose pid got reused / is unreadable?
         try:
             age = time.time() - path.stat().st_mtime
         except OSError:
