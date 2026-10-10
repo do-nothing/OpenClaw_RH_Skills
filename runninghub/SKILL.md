@@ -86,6 +86,8 @@ Read `{baseDir}/references/ai-application.md` and follow its complete flow.
 
 ## workflow (batch / async)
 
+> **任务池命令请用非沙箱模式执行**：沙箱会限制输出目录写入，且命令退出时会连带杀死后台 watcher，导致任务卡 PENDING。
+
 **Any RunningHub workflow task runs through the task pool** — single jobs too
 (工作流出图/改图、语音克隆、数字人、文生音乐、H3 首帧/首尾帧/多参考生视频), not just
 batches. The available workflow types and their params live in
